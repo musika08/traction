@@ -7,7 +7,13 @@ import {
   ARMOURY_LABEL,
   CONTROLLER_OPTIONS,
   armouryChecked,
+  ACTIONS,
+  COMBO_BUTTONS,
   armouryDisabled,
+  backButtonOptions,
+  changedLabel,
+  comboOptions,
+  combosNote,
   controllerBanner,
   controllerModeDescription,
   touchscreenCheck,
@@ -69,4 +75,42 @@ test('inline picker rules', () => {
   assert.deepEqual(pressCancel(false), { open: false, handled: false });
   assert.equal(focusIndex(CONTROLLER_OPTIONS, 'desktop', true), 1);
   assert.equal(focusIndex(CONTROLLER_OPTIONS, 'desktop', false), -1);
+});
+
+test('action list keeps the plan order and labels', () => {
+  assert.equal(ACTIONS.length, 43);
+  assert.deepEqual(ACTIONS.slice(0, 3).map((a) => [a.data, a.label]), [['nothing', 'Nothing'], ['a', 'A'], ['b', 'B']]);
+  assert.deepEqual(ACTIONS.slice(-3).map((a) => a.label), ['Volume up', 'Volume down', 'Show touch keyboard']);
+  assert.equal(new Set(ACTIONS.map((a) => a.data)).size, ACTIONS.length);
+});
+
+test('combo buttons are the 16 non-back buttons in plan order', () => {
+  assert.equal(COMBO_BUTTONS.length, 16);
+  assert.deepEqual(COMBO_BUTTONS.slice(0, 2).map((b) => b.label), ['D-pad up', 'D-pad down']);
+  assert.deepEqual(COMBO_BUTTONS.slice(-4).map((b) => b.data), ['view', 'menu', 'lt', 'rt']);
+  assert.ok(!COMBO_BUTTONS.some((b) => b.data.startsWith('back_')));
+});
+
+test('back button options start with Shift (combos), combo options with Unchanged', () => {
+  const back = backButtonOptions();
+  assert.equal(back.length, ACTIONS.length + 1);
+  assert.deepEqual(back[0], { data: 'shift', label: 'Shift (combos)' });
+  assert.deepEqual(back[1], { data: 'nothing', label: 'Nothing' });
+  const combo = comboOptions();
+  assert.equal(combo.length, ACTIONS.length + 1);
+  assert.deepEqual(combo[0], { data: 'unchanged', label: 'Unchanged' });
+});
+
+test('combosNote appears only when neither back button is Shift', () => {
+  const text = 'Combos need a back button set to Shift.';
+  assert.equal(combosNote({ back_left: 'a', back_right: 'b' }), text);
+  assert.equal(combosNote({ back_left: 'shift', back_right: 'b' }), '');
+  assert.equal(combosNote({ back_left: 'a', back_right: 'shift' }), '');
+  assert.equal(combosNote({ back_left: 'shift', back_right: 'shift' }), '');
+});
+
+test('changedLabel', () => {
+  assert.equal(changedLabel(0), 'None changed');
+  assert.equal(changedLabel(3), '3 changed');
+  assert.equal(changedLabel(undefined), 'None changed');
 });

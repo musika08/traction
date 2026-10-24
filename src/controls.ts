@@ -54,3 +54,103 @@ export function armouryChecked(replaced: boolean, busy: boolean): boolean {
 export function armouryDisabled(disabled: boolean, blocked: string | undefined): boolean {
   return disabled || !!blocked;
 }
+
+// ---------- Buttons ----------
+
+export const BACK_LEFT_LABEL = 'Left back button';
+export const BACK_RIGHT_LABEL = 'Right back button';
+export const COMBOS_LABEL = 'Combos';
+export const RESET_BUTTONS_LABEL = 'Reset buttons';
+export const COMBOS_NEED_SHIFT = 'Combos need a back button set to Shift.';
+
+export type ButtonsState = {
+  back_left: string;
+  back_right: string;
+  combos: Record<string, string>;
+  changed: number;
+};
+
+// What a button can do (ids and order as in the backend's bindings table).
+export const ACTIONS: { data: string; label: string }[] = [
+  { data: 'nothing', label: 'Nothing' },
+  { data: 'a', label: 'A' },
+  { data: 'b', label: 'B' },
+  { data: 'x', label: 'X' },
+  { data: 'y', label: 'Y' },
+  { data: 'lb', label: 'LB' },
+  { data: 'rb', label: 'RB' },
+  { data: 'ls', label: 'Left stick click' },
+  { data: 'rs', label: 'Right stick click' },
+  { data: 'du', label: 'D-pad up' },
+  { data: 'dd', label: 'D-pad down' },
+  { data: 'dl', label: 'D-pad left' },
+  { data: 'dr', label: 'D-pad right' },
+  { data: 'lt', label: 'LT' },
+  { data: 'rt', label: 'RT' },
+  { data: 'view', label: 'View' },
+  { data: 'menu', label: 'Menu' },
+  { data: 'mouse_left', label: 'Left click' },
+  { data: 'mouse_right', label: 'Right click' },
+  { data: 'mouse_middle', label: 'Middle click' },
+  { data: 'scroll_up', label: 'Scroll up' },
+  { data: 'scroll_down', label: 'Scroll down' },
+  { data: 'esc', label: 'Esc' },
+  { data: 'enter', label: 'Enter' },
+  { data: 'tab', label: 'Tab' },
+  { data: 'backspace', label: 'Backspace' },
+  { data: 'space', label: 'Space' },
+  { data: 'up', label: 'Up arrow' },
+  { data: 'down', label: 'Down arrow' },
+  { data: 'left', label: 'Left arrow' },
+  { data: 'right', label: 'Right arrow' },
+  { data: 'page_up', label: 'Page Up' },
+  { data: 'page_down', label: 'Page Down' },
+  { data: 'win', label: 'Windows key' },
+  { data: 'show_desktop', label: 'Show desktop' },
+  { data: 'screenshot', label: 'Screenshot' },
+  { data: 'task_manager', label: 'Task Manager' },
+  { data: 'close_window', label: 'Close window' },
+  { data: 'alt_tab', label: 'Alt+Tab' },
+  { data: 'win_tab', label: 'Win+Tab' },
+  { data: 'volume_up', label: 'Volume up' },
+  { data: 'volume_down', label: 'Volume down' },
+  { data: 'touch_keyboard', label: 'Show touch keyboard' },
+];
+
+// The buttons that have a combo (every button except the two back buttons), in the backend's order.
+export const COMBO_BUTTONS: { data: string; label: string }[] = [
+  { data: 'du', label: 'D-pad up' },
+  { data: 'dd', label: 'D-pad down' },
+  { data: 'dl', label: 'D-pad left' },
+  { data: 'dr', label: 'D-pad right' },
+  { data: 'ls', label: 'Left stick click' },
+  { data: 'rs', label: 'Right stick click' },
+  { data: 'lb', label: 'LB' },
+  { data: 'rb', label: 'RB' },
+  { data: 'a', label: 'A' },
+  { data: 'b', label: 'B' },
+  { data: 'x', label: 'X' },
+  { data: 'y', label: 'Y' },
+  { data: 'view', label: 'View' },
+  { data: 'menu', label: 'Menu' },
+  { data: 'lt', label: 'LT' },
+  { data: 'rt', label: 'RT' },
+];
+
+export function backButtonOptions(): { data: string; label: string }[] {
+  return [{ data: 'shift', label: 'Shift (combos)' }, ...ACTIONS];
+}
+
+export function comboOptions(): { data: string; label: string }[] {
+  return [{ data: 'unchanged', label: 'Unchanged' }, ...ACTIONS];
+}
+
+// Combos are reached through a back button set to Shift; with neither set, the stored combos stay but do nothing.
+export function combosNote(b: { back_left?: string; back_right?: string } | undefined): string {
+  if (!b) return '';
+  return b.back_left === 'shift' || b.back_right === 'shift' ? '' : COMBOS_NEED_SHIFT;
+}
+
+export function changedLabel(n: number | undefined): string {
+  return n && n > 0 ? n + ' changed' : 'None changed';
+}

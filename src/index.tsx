@@ -15,16 +15,26 @@ import {
   ARMOURY_BUSY,
   ARMOURY_DESCRIPTION,
   ARMOURY_LABEL,
+  BACK_LEFT_LABEL,
+  BACK_RIGHT_LABEL,
+  COMBOS_LABEL,
+  COMBO_BUTTONS,
   CONTROLLER_NOT_FOUND,
   CONTROLLER_OPTIONS,
+  ButtonsState,
   ControllerMode,
   GRIP_VIBRATION_DESCRIPTION,
   NOT_ALLY,
+  RESET_BUTTONS_LABEL,
   TOUCHSCREEN_DESCRIPTION,
   TOUCH_POLL_MS,
   TOUCH_TIMEOUT_TEXT,
   armouryChecked,
   armouryDisabled,
+  backButtonOptions,
+  changedLabel,
+  comboOptions,
+  combosNote,
   controllerBanner,
   controllerModeDescription,
   touchscreenCheck,
@@ -41,6 +51,7 @@ type State = {
   controller: { mode: ControllerMode; found: boolean };
   vibration: boolean;
   touchscreen: { found: boolean; enabled: boolean };
+  buttons?: ButtonsState;
   blocked: string;
   note: string;
   busy: boolean;
@@ -53,6 +64,9 @@ const getState = callable<[], State>('get_state');
 const setControllerMode = callable<[ControllerMode], Result>('set_controller_mode');
 const setGripVibration = callable<[boolean], Result>('set_grip_vibration');
 const setTouchscreen = callable<[boolean], Result>('set_touchscreen');
+const setBackButton = callable<['left' | 'right', string], Result>('set_back_button');
+const setCombo = callable<[string, string], Result>('set_combo');
+const resetButtons = callable<[], Result>('reset_buttons');
 const setArmouryReplaced = callable<[boolean], Result>('set_armoury_replaced');
 
 const UNAVAILABLE_RECHECK_MS = 5000;
@@ -201,6 +215,82 @@ function InlinePicker<T>(props: {
           );
         })}
     </Focusable>
+  );
+}
+
+// "Combos  3 changed ▾": expands one inline picker per button (Unchanged, then the actions) inside the panel.
+function CombosList(props: {
+  buttons: ButtonsState;
+  disabled: boolean;
+  onChange: (button: string, action: string) => void;
+}) {
+  const { buttons, disabled, onChange } = props;
+  const [open, setOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const wasOpen = useRef(false);
+  const options = comboOptions();
+
+  useEffect(() => {
+    if (disabled && open) setOpen(false);
+  }, [disabled, open]);
+
+  useEffect(() => {
+    if (!open && wasOpen.current) rowRef.current?.focus();
+    wasOpen.current = open;
+  }, [open]);
+
+  const toggle = () => setOpen((o) => pressRow(o, disabled));
+  const cancel = (evt: CustomEvent) => {
+    const r = pressCancel(open);
+    if (!r.handled) return;
+    evt.preventDefault();
+    evt.stopPropagation();
+    setOpen(r.open);
+  };
+
+  return (
+    <>
+      <PanelSectionRow>
+        <Focusable
+          ref={rowRef}
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '8px',
+            width: '100%',
+            boxSizing: 'border-box',
+            padding: '8px 10px',
+            borderRadius: '2px',
+            background: 'rgba(255, 255, 255, 0.06)',
+            color: disabled ? '#8b929a' : '#dcdedf',
+            fontSize: '14px',
+          }}
+          onActivate={toggle}
+          onClick={toggle}
+          onCancelButton={cancel}
+          onOKActionDescription={open ? 'Close' : 'Open'}
+        >
+          <span style={{ whiteSpace: 'nowrap' }}>{COMBOS_LABEL}</span>
+          <span style={{ color: disabled ? '#8b929a' : '#ffffff', whiteSpace: 'nowrap' }}>
+            {changedLabel(buttons.changed) + (open ? ' ▴' : ' ▾')}
+          </span>
+        </Focusable>
+      </PanelSectionRow>
+      {open &&
+        COMBO_BUTTONS.map((b) => (
+          <PanelSectionRow key={b.data}>
+            <InlinePicker
+              label={b.label}
+              options={options}
+              value={buttons.combos?.[b.data] ?? 'unchanged'}
+              disabled={disabled}
+              unknownText="Unchanged"
+              onChange={(v) => onChange(b.data, v)}
+            />
+          </PanelSectionRow>
+        ))}
+    </>
   );
 }
 
@@ -397,6 +487,10 @@ function Content() {
     setWorking(false);
   };
 
+  const buttons = state.buttons;
+  const backOptions = backButtonOptions();
+  const comboNote = buttons ? combosNote(buttons) : '';
+
   const toggleArmoury = () => {
     if (armouryPending) return;
     // The target is always the opposite of the stored value, whatever the toggle reported.
@@ -480,6 +574,40 @@ function Content() {
             />
           </PanelSectionRow>
           <StatusRow status={statuses.touch} />
+        </>
+      )}
+      {buttons && (
+        <>
+          <PanelSectionRow>
+            <InlinePicker
+              label={BACK_LEFT_LABEL}
+              options={backOptions}
+              value={buttons.back_left}
+              disabled={controllerDisabled}
+              onChange={(v) => run('buttons', () => setBackButton('left', v))}
+            />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <InlinePicker
+              label={BACK_RIGHT_LABEL}
+              options={backOptions}
+              value={buttons.back_right}
+              disabled={controllerDisabled}
+              onChange={(v) => run('buttons', () => setBackButton('right', v))}
+            />
+          </PanelSectionRow>
+          <Note text={comboNote} />
+          <CombosList
+            buttons={buttons}
+            disabled={controllerDisabled}
+            onChange={(button, action) => run('buttons', () => setCombo(button, action))}
+          />
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={controllerDisabled} onClick={() => run('buttons', () => resetButtons())}>
+              {RESET_BUTTONS_LABEL}
+            </ButtonItem>
+          </PanelSectionRow>
+          <StatusRow status={statuses.buttons} />
         </>
       )}
     </PanelSection>
