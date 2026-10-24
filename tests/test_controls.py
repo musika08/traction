@@ -299,3 +299,24 @@ def test_pad_not_seen_keeps_bindings_and_logs_once(tmp_path, caplog):
     caplog.set_level("INFO")
     run(go())
     assert sum(PAD_NOT_SEEN in rec.getMessage() for rec in caplog.records) == 1
+
+
+def test_touched_zones_follow_the_writes(tmp_path):
+    async def go():
+        c = FakeClient()
+        s = settings(tmp_path, bindings=dict(CHOSEN))
+        await controls.apply_bindings(c, s, "gamepad")
+        assert s.touched_zones == {5, 8}
+        s.bindings = {"back_left": "shift", "back_right": "b", "combos": {}}   # "a" back to unchanged
+        c.calls.clear()
+        await controls.apply_bindings(c, s, "desktop")
+        assert binding_writes(c) == [(5, Z5_DESKTOP), (8, Z8_DESKTOP)]
+        assert s.touched_zones == {5, 8}                     # desktop slots are not the Gamepad factory set
+        c.calls.clear()
+        await controls.apply_bindings(c, s, "gamepad")
+        assert binding_writes(c) == [(5, ["01-01", "00-00", "01-02", "00-00"]), (8, Z8_GAMEPAD)]
+        assert s.touched_zones == {8} and Settings.load(s.path).touched_zones == {8}
+        c.bindings_reply = "reset_failed"
+        await controls.apply_bindings(c, s, "gamepad")
+        assert s.touched_zones == set() and s.bindings == FACTORY
+    run(go())

@@ -1212,3 +1212,148 @@ def test_old_overdrive_writes_no_bindings(monkeypatch, tmp_path):   # Review Foc
     for r in results:
         assert r == {"ok": False, "message": UPDATE}
     assert p.settings.bindings["back_right"] == "b"
+
+
+# ---------- buttons: fix round 1 (writes under the lock, zones returned to factory) ----------
+
+def held_bindings(c, outcomes):
+    """set_bindings waits for `release` on its first call and answers by outcomes (one per call, last repeats)."""
+    entered, release = asyncio.Event(), asyncio.Event()
+    seq = list(outcomes)
+    first = [True]
+
+    async def handler(args):
+        if first[0]:
+            first[0] = False
+            entered.set()
+            await release.wait()
+        from fake_helper import bindings_reply
+        return bindings_reply(seq.pop(0) if len(seq) > 1 else seq[0], args)
+    c.handlers["set_bindings"] = handler
+    return entered, release
+
+
+def test_two_quick_setters_keep_both_changes(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        controller_found(c)
+        entered, release = held_bindings(c, ["ok"])
+        first = asyncio.ensure_future(p.set_combo("a", "esc"))
+        await wait(entered.wait())
+        second = asyncio.ensure_future(p.set_combo("x", "tab"))   # waits for the lock while the first writes
+        for _ in range(5):
+            await asyncio.sleep(0)
+        release.set()
+        assert (await wait(first))["ok"] and (await wait(second))["ok"]
+        assert s.bindings["combos"] == {"a": "esc", "x": "tab"}
+        assert Settings.load(s.path).bindings["combos"] == {"a": "esc", "x": "tab"}
+    run(go())
+
+
+def test_reset_reply_while_a_setter_waits_does_not_bring_the_old_set_back(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, bindings={"back_left": "a", "back_right": "shift", "combos": {"b": "esc"}},
+                              touched_zones={5, 8})
+        controller_found(c)
+        entered, release = held_bindings(c, ["reset", "ok"])
+        first = asyncio.ensure_future(p.set_combo("y", "tab"))      # this write loses the pad: factory reset
+        await wait(entered.wait())
+        second = asyncio.ensure_future(p.set_combo("x", "tab"))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        release.set()
+        assert (await wait(first)) == {"ok": False, "message": RESET_MESSAGE}
+        assert (await wait(second))["ok"]
+        # built from the cleared set: the old back button and combo stay gone
+        assert s.bindings == {"back_left": "shift", "back_right": "shift", "combos": {"x": "tab"}}
+        assert s.touched_zones == {6}
+        c.calls.clear()
+        await wait(p.reapplier.apply_all())
+        assert [z for z, _ in binding_writes(c)] == [6]
+    run(go())
+
+
+def test_unchanged_while_controller_missing_is_written_at_the_next_reapply(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        controller_found(c)
+        assert (await wait(p.set_combo("a", "screenshot")))["ok"]
+        assert s.touched_zones == {5}
+        c.handlers["controller_info"] = reply(ok({"found": False, "pid": "0x1B4C", "xbox": False}))
+        assert (await wait(p.set_combo("a", "unchanged"))) == {"ok": True, "message": NO_CONTROLLER}
+        assert Settings.load(s.path).touched_zones == {5}         # still to be written back
+        controller_found(c)
+        c.calls.clear()
+        await wait(p.reapplier.apply_all())
+        assert binding_writes(c) == [(5, Z5_FACTORY)]              # factory slots, once
+        assert s.touched_zones == set() and Settings.load(s.path).touched_zones == set()
+        c.calls.clear()
+        await wait(p.reapplier.apply_all())
+        assert binding_writes(c) == []                             # then not again
+    run(go())
+
+
+def test_reset_while_controller_missing_restores_touched_zones_later(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        controller_found(c)
+        assert (await wait(p.set_back_button("right", "b")))["ok"]
+        c.handlers["controller_info"] = reply(ok({"found": False, "pid": "0x1B4C", "xbox": False}))
+        assert (await wait(p.reset_buttons()))["ok"]
+        assert s.bindings == FACTORY and s.touched_zones == {8}
+        controller_found(c)
+        c.calls.clear()
+        await wait(p.reapplier.apply_all())
+        assert binding_writes(c) == [(8, ["02-8E", "02-8E", "02-8F", "02-8F"])]
+        assert s.touched_zones == set()
+    run(go())
+
+
+def test_desktop_then_gamepad_after_unchanged_rewrites_the_zone(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, controller_mode="desktop")
+        controller_found(c)
+        assert (await wait(p.set_combo("a", "screenshot")))["ok"]
+        assert (await wait(p.set_combo("a", "unchanged")))["ok"]   # written with desktop slots
+        assert s.touched_zones == {5}                               # not yet the Gamepad factory set
+        c.calls.clear()
+        assert (await wait(p.set_controller_mode("gamepad")))["ok"]
+        assert binding_writes(c) == [(5, Z5_FACTORY)]
+        assert s.touched_zones == set()
+        c.calls.clear()
+        assert (await wait(p.set_controller_mode("desktop")))["ok"]
+        assert binding_writes(c) == []
+    run(go())
+
+
+def test_reset_buttons_partial_keeps_unwritten_zones_touched(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, bindings={"back_left": "shift", "back_right": "shift",
+                                                  "combos": {"du": "esc", "a": "tab"}}, touched_zones={1, 5})
+        controller_found(c)
+        seq = ["ok", "ok", "not_seen"]
+
+        async def handler(args):
+            from fake_helper import bindings_reply
+            return bindings_reply(seq.pop(0) if len(seq) > 1 else seq[0], args)
+        c.handlers["set_bindings"] = handler
+        assert (await wait(p.reset_buttons())) == {"ok": False, "message": PAD_NOT_SEEN}
+        assert [z for z, _ in binding_writes(c)] == [1, 2, 3]
+        assert s.touched_zones == {5}                               # zone 1 got its factory slots
+        assert s.bindings["combos"] == {"du": "esc", "a": "tab"}   # the reset did not finish: choices kept
+    run(go())
+
+
+def test_reset_reply_reports_a_failed_save(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, bindings={"back_left": "a", "back_right": "shift", "combos": {}})
+        controller_found(c)
+        c.bindings_reply = "reset"
+
+        def broken():
+            raise OSError("disk full")
+        s.save = broken
+        r = await wait(p.set_combo("x", "esc"))
+        assert r["ok"] is False and r["message"].startswith(RESET_MESSAGE) and "disk full" in r["message"]
+        assert s.bindings == FACTORY
+    run(go())

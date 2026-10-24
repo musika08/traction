@@ -63,6 +63,11 @@ class ControllerAuto:
     # ---------- control ----------
 
     @property
+    def written_mode(self) -> Optional[str]:
+        """The mode this loop last wrote ("gamepad" or "desktop"), None when unknown."""
+        return self._written
+
+    @property
     def running(self) -> bool:
         """True from start() until stop()."""
         return self._on
@@ -191,13 +196,16 @@ class ControllerAuto:
 
     async def _write_bindings(self, mode: str) -> None:
         """The changed button zones for the mode just written (called under the reapplier's lock). A failure is
-        logged by apply_bindings (once per kind); the mode stays written."""
+        logged by apply_bindings (once per kind); the mode stays written. A factory reset by the helper (the pad went
+        away) is shown with the reapplier's warning."""
         rp = self.reapplier
         settings = getattr(rp, "settings", None)
         blocked = getattr(rp, "_blocked", None)
         if settings is None or (blocked is not None and blocked()):
             return
-        await apply_bindings(self.client, settings, mode, self.log)
+        b = await apply_bindings(self.client, settings, mode, self.log)
+        if b.get("reset") and b.get("message"):
+            rp.warning = " ".join(w for w in (rp.warning, b["message"]) if w)
 
     # ---------- loop ----------
 

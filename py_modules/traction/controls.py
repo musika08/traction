@@ -95,16 +95,18 @@ async def set_touchscreen(client, enabled: bool) -> dict:
 
 async def write_zones(client, chosen: dict, mode: str, zones, logger: Optional[logging.Logger] = None) -> dict:
     """Writes each zone's four slots for `mode` ("desktop" gets G-Helper's desktop defaults, gamepad/auto the owner's
-    set). Stops at the first failure. `reset` is True when the pad went away after a write (the helper then wrote
-    the factory set, or tried to: data.reset true or false); a refusal before the write ("Windows does not see the
-    gamepad", data null) is not a reset: nothing was written. Each kind of failure is logged once until a write
-    lands."""
+    set). Stops at the first failure; `written` lists the zones that landed. `reset` is True when the pad went away
+    after a write (the helper then wrote the factory set, or tried to: data.reset true or false); a refusal before
+    the write ("Windows does not see the gamepad", data null) is not a reset: nothing was written. Each kind of
+    failure is logged once until a write lands."""
     desktop = mode == "desktop"
     log = logger or logging.getLogger("traction")
+    written = []
     for zone in zones:
         r = await client.call("set_bindings", {"zone": zone, "slots": bindings.zone_slots(zone, chosen, desktop)},
                               timeout=BINDINGS_TIMEOUT)
         if r.get("ok"):
+            written.append(zone)
             continue
         message = _msg(r, "The buttons were not changed.")
         data = r.get("data")
@@ -112,25 +114,51 @@ async def write_zones(client, chosen: dict, mode: str, zones, logger: Optional[l
         if message not in _bindings_logged:
             _bindings_logged.add(message)
             log.warning(f"Button bindings: zone {zone} not written: {message}")
-        return _result(False, message, reset=reset, transport=transport_failure(r))
+        return _result(False, message, reset=reset, transport=transport_failure(r), written=written)
     if zones:
         _bindings_logged.clear()
-    return _result(True, "", reset=False, transport=False)
+    return _result(True, "", reset=False, transport=False, written=written)
+
+
+def note_written(settings: Settings, chosen: dict, mode: str, written) -> bool:
+    """Updates settings.touched_zones after zones were written from `chosen` for `mode`: a zone with an owner choice
+    is touched; one without leaves only after a Gamepad (non-desktop) factory write, since desktop slots are not the
+    Gamepad factory set. True when the set changed (the caller saves)."""
+    changed = set(bindings.changed_zones(chosen))
+    before = set(settings.touched_zones)
+    for zone in written:
+        if zone in changed:
+            settings.touched_zones.add(zone)
+        elif mode != "desktop":
+            settings.touched_zones.discard(zone)
+    return settings.touched_zones != before
+
+
+def forget_bindings(settings: Settings) -> None:
+    """After the helper's factory reset (the pad went away): no owner choice and no touched zone is left."""
+    settings.bindings = bindings.clean(None)
+    settings.touched_zones = set()
 
 
 async def apply_bindings(client, settings: Settings, mode: str, logger: Optional[logging.Logger] = None) -> dict:
-    """Writes the zones the owner changed, for `mode`. When the pad went away after a write (the helper reset it to
-    the factory set) the stored bindings are cleared and saved, so no later reapply writes them again."""
-    zones = bindings.changed_zones(settings.bindings)
+    """Writes the zones the owner changed plus the touched ones (factory slots where the owner has no choice now),
+    for `mode`. When the pad went away after a write (the helper reset it to the factory set) the stored bindings and
+    touched zones are cleared and saved, so no later reapply writes them again."""
+    zones = sorted(set(bindings.changed_zones(settings.bindings)) | set(settings.touched_zones))
     if not zones:
-        return _result(True, "", reset=False, transport=False)
-    r = await write_zones(client, settings.bindings, mode, zones, logger)
+        return _result(True, "", reset=False, transport=False, written=[])
+    chosen = bindings.clean(settings.bindings)
+    r = await write_zones(client, chosen, mode, zones, logger)
     if r["reset"]:
-        settings.bindings = bindings.clean(None)
+        forget_bindings(settings)
+        save = True
+    else:
+        save = note_written(settings, chosen, mode, r["written"])
+    if save:
         try:
             settings.save()
         except OSError as e:
-            (logger or logging.getLogger("traction")).error(f"Could not save the cleared button bindings: {e}")
+            (logger or logging.getLogger("traction")).error(f"Could not save the button bindings: {e}")
     return r
 
 

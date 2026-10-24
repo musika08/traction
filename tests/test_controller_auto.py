@@ -528,3 +528,21 @@ def test_auto_failed_mode_write_skips_the_bindings(tmp_path):
 
 async def _reply(r):
     return r
+
+
+def test_auto_switch_reset_is_shown_in_the_reapplier_warning(tmp_path):
+    from fake_helper import RESET_MESSAGE
+    async def go():
+        c, r, ca, _ = setup(tmp_path)
+        r.settings.bindings = dict(CHOSEN)
+        c.bindings_reply = "reset"
+        ca.start()
+        front(c, ["msedge.exe"])
+        frames(c, 0.0)
+        for _ in range(3):
+            await ca.run_once()
+        assert ca.written_mode == "desktop"
+        assert r.warning == RESET_MESSAGE
+        assert r.settings.bindings["combos"] == {} and r.settings.touched_zones == set()
+        await ca.stop()
+    run(go())

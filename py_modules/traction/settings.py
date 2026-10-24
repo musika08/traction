@@ -29,6 +29,9 @@ class Settings:
         self.user_set = False
         # The owner's button choices (bindings.clean shape); factory until changed.
         self.bindings = binding_model.clean(None)
+        # Zones Traction has written custom slots to and not yet written back to the Gamepad factory set: they are
+        # rewritten (factory slots where the owner has no choice) until then.
+        self.touched_zones: set = set()
         self.logger = None
         self._reset_note = ""               # why the file was reset (shown in get_state)
         self._unreadable_pending = False    # the unreadable file is still on disk with no copy kept yet
@@ -63,6 +66,10 @@ class Settings:
         if isinstance(raw.get("user_set"), bool):
             self.user_set = raw["user_set"]
         self.bindings = binding_model.clean(raw.get("bindings"))   # unknown ids drop to factory, never fails
+        zones = raw.get("touched_zones")
+        if isinstance(zones, list):
+            valid = binding_model.all_zones()
+            self.touched_zones = {z for z in zones if type(z) is int and z in valid}
 
     def to_dict(self) -> dict:
         """Only the owner's binding choices are stored (a missing key means factory); no key at all when none."""
@@ -73,6 +80,8 @@ class Settings:
             stored["combos"] = dict(b["combos"])
         if stored:
             out["bindings"] = stored
+        if self.touched_zones:
+            out["touched_zones"] = sorted(self.touched_zones)
         return out
 
     def save(self) -> None:

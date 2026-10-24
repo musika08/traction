@@ -161,3 +161,18 @@ def test_bindings_round_trip_and_junk_dropped(tmp_path):
     for bad in ("x", 1, None, ["a"]):
         p.write_text(json.dumps({"bindings": bad}), encoding="utf-8")
         assert Settings.load(str(p)).bindings == {"back_left": "shift", "back_right": "shift", "combos": {}}
+
+
+def test_touched_zones_round_trip_and_junk_dropped(tmp_path):
+    p = tmp_path / "settings.json"
+    s = Settings.load(str(p))
+    assert s.touched_zones == set()
+    s.touched_zones = {8, 5}
+    s.save()
+    assert json.loads(p.read_text(encoding="utf-8"))["touched_zones"] == [5, 8]
+    assert Settings.load(str(p)).touched_zones == {5, 8}
+    p.write_text(json.dumps({"touched_zones": [0, 3, 10, "4", True, 9, 3.0]}), encoding="utf-8")
+    assert Settings.load(str(p)).touched_zones == {3, 9}
+    for bad in ("5", 5, None, {"5": 1}):
+        p.write_text(json.dumps({"touched_zones": bad}), encoding="utf-8")
+        assert Settings.load(str(p)).touched_zones == set()
