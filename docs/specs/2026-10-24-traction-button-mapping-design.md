@@ -1,89 +1,79 @@
-# Traction: button mapping design
+# Traction: button mapping design (v2, Armoury Crate model)
 
-Date: 2026-10-24. Status: draft for owner review. Extends `2026-10-24-traction-design.md` section 4 (Button remap),
-which planned the back buttons only; the owner widened it after the live probe
-(`docs/notes/2026-10-24-remap-probe.md`).
+Date: 2026-10-24. Status: v2 for owner review. v1 (back button "Shift or normal" plus a combo list) was built and
+the right-back-button = B step passed live; the owner then asked for Armoury Crate SE's model. Research on ASUS's
+guides (FAQ 1050220, 1050046, the ROG Ally remap guide, the Armoury Crate SE v3 article) and the device probe
+(`docs/notes/2026-10-24-remap-probe.md`) are the basis.
 
-## 1. What the owner gets
+## 1. What the owner gets (Armoury Crate model)
 
-- **Back buttons.** For each back button (left, right) one choice:
-  - **Shift (combos)**: the factory behaviour. Holding it makes other buttons do their combo action.
-  - **A button or key from the list** (section 3): it then acts as that, and stops being a Shift key.
-  Example: right back button = B, left back button stays Shift.
-- **Combos.** For each of the 17 other buttons (A, B, X, Y, LB, RB, LT, RT, left stick click, right stick click,
-  D-pad up/down/left/right, View, Menu) one choice of what "Shift + that button" does: **Unchanged** (leave the
-  controller as it is), **Nothing**, or an action from the list.
-  Example: Shift + A = Screenshot.
-- **Reset buttons**: puts every button and combo back to the factory set.
-- Combos only fire while at least one back button is set to Shift; the panel says so when both are remapped.
+- **Pick a button, then set its two jobs:**
+  - **Primary**: what the button does when pressed.
+  - **Secondary function**: what it does while a back button (M1 or M2) is held.
+  Example: A: Primary = Left click, Secondary = Screenshot. A clicks; holding M1 + A takes a screenshot.
+- **Buttons:** A, B, X, Y, D-pad up/down/left/right, LB, RB, LT, RT, left stick click, right stick click, View, Menu,
+  and the back buttons M1 (right) and M2 (left).
+- **Back buttons:** each has a **"Use as secondary function"** switch (on by default). On: holding it fires the other
+  buttons' secondary functions (factory behaviour). Off: it becomes a normal button with its own Primary (e.g. B).
+  When both are off, secondary functions can't be reached; the panel says so.
+- **Two mapping sets: Gamepad and Desktop.** Each controller mode has its own primaries and secondaries; the panel
+  edits the set of the mode chosen at the top of the Buttons screen (default: the current mode). Factory set =
+  G-Helper's gamepad and desktop defaults.
+- **Per button "Reset to factory"** and **"Reset all buttons"** (both sets).
+- The **Xbox button** is not touched (Steam uses it as its own menu button, which the owner wants to keep).
+- **Command Center and Armoury Crate buttons:** Part B, see section 6.
 
 ## 2. Panel
 
-A new section **Buttons** under the existing rows:
-- "Left back button" and "Right back button": dropdowns (Shift (combos), then the list).
-- "Combos": a row that opens a full-screen list (Decky modal) with one dropdown per button, so the main panel stays
-  short. The row shows how many combos are changed, e.g. "3 changed".
-- "Reset buttons".
-- The same Armoury Crate note and old-Overdrive block as the other controller rows.
+Section **Buttons** under the existing rows:
+- "Mapping set": Gamepad / Desktop (opens on the current mode).
+- One row per button showing "Primary / Secondary" (e.g. "Left click / Screenshot"); pressing it expands that button
+  inline with two pickers (Primary, Secondary) and "Reset to factory". For M1/M2 the expanded part also has the
+  "Use as secondary function" switch, and Primary is only enabled when that switch is off.
+- "Reset all buttons".
+- Note when both back buttons are off: "Secondary functions need a back button set to Use as secondary function."
+- Inline pickers only (the panel avoids Decky's popup windows). Same Armoury Crate note and old-Overdrive block as
+  the other controller rows.
 
 ## 3. The action list
 
-Only actions that work with nothing else running (no G-Helper or Armoury Crate hotkey listener):
-- Controller: A, B, X, Y, LB, RB, LT, RT, L-stick click, R-stick click, D-pad up/down/left/right, View, Menu.
-- Mouse: left click, right click, middle click, scroll up, scroll down.
-- Keys: Esc, Enter, Tab, Backspace, Space, arrow keys, Page Up, Page Down, Windows key.
-- Windows: Show desktop (Win+D), Screenshot (Win+Shift+S), Task Manager (Ctrl+Shift+Esc), Close window (Alt+F4),
-  Alt+Tab, Win+Tab, Volume up, Volume down, Show touch keyboard.
-- Nothing.
-Codes come from G-Helper `AllyControl.cs` (constants and `BindingGroups`) at c09017453d9ed0c52261b67a48d02bd55232e6ac;
-keys are PS/2 set-2 codes (`02-xx`), shortcuts `04-<n>-<keys>`, media `05-xx`, mouse `03-xx`, controller `01-xx`.
-Left out on purpose: G-Helper's own hotkeys (brightness, controller mode, FPS limit, touchscreen toggle, overlay):
-they are Ctrl+Shift+Alt+F-key shortcuts that need a program listening for them. They can come later if Traction
-listens for them itself.
+Unchanged from v1 (only actions that work with nothing else running): Nothing; gamepad buttons A, B, X, Y, LB, RB,
+LT, RT, L/R stick click, D-pad, View, Menu; mouse left/right/middle click, scroll up/down; keys Esc, Enter, Tab,
+Backspace, Space, arrows, Page Up/Down, Windows key; Windows actions Show desktop, Screenshot, Task Manager, Close
+window, Alt+Tab, Win+Tab, Volume up/down, Show touch keyboard. Codes from G-Helper `AllyControl.cs` at
+c09017453d9ed0c52261b67a48d02bd55232e6ac. Later additions (Armoury Crate has them, not in v2): numpad keys, any
+key, custom key combinations, hold to repeat.
 
 ## 4. How it reaches the controller
 
-- The binding report proved on the device: `5A D1 02 <zone> 2C` + four 11-byte slots (button, button's combo,
-  partner button, partner's combo), one 64-byte feature report per zone; zone pairs as G-Helper (1 D-pad up/down,
-  2 D-pad left/right, 3 stick clicks, 4 bumpers, 5 A/B, 6 X/Y, 7 View/Menu, 8 back buttons (left = M2, right = M1),
-  9 triggers). No admin rights needed; a single zone write takes effect at once (probe, 2026-10-24).
-- The controller cannot be read back, so Traction only writes a zone after the owner changes something in it, and
-  then writes all four slots of that zone: changed slots from the owner's choices, untouched slots from G-Helper's
-  defaults. "Unchanged" combos in a written zone therefore become G-Helper's default for that combo (stated in the
-  panel's help text). Reset writes all 9 zones with G-Helper's defaults.
-- Back button as Shift = the factory codes `02-8E` (left) / `02-8F` (right) in its slot and its combo slot. A back
-  button set to an action gets it in its slot only; its combo slot keeps the factory Shift code (right back button as
-  B: zone 8 = `02-8E, 02-8E, 01-02, 02-8F`, the report proven on the device).
-- New helper command `set_bindings {zone, slots[4]}`; slot values validated against the action list (section 3)
-  only, so the helper can never send an arbitrary report.
-- Safety: after every write the helper checks that Windows still sees the gamepad (XInput pad present). If it is gone
-  for 5 s, the helper writes G-Helper's full default set (start-up sequence, Gamepad mode, all 9 zones) and the
-  panel shows "The controller stopped responding, so buttons were reset to the factory set."
-  (Final review: every XInput pad 0-3 seen before the write must be seen again at 4 polls in a row, about 2 s; the
-  reset looks for the controller up to 3 times, 1 s apart. Desktop-mode writes pass `watch: false`: no check, no
-  polling, no reset, since Desktop mode hides the pad. After a reset the next reapply tick writes the stored mode
-  and vibration again.)
+Same as v1, already built and reviewed: the binding report `5A D1 02 <zone> 2C` + four 11-byte slots per zone
+(button primary, button secondary, partner primary, partner secondary), allow-listed `set_bindings`, the gamepad
+check with factory reset in Gamepad, `watch: false` in Desktop, `touched_zones`, writes under the lock, reapply after
+sleep / Decky start / Armoury switch / mode switch. A back button with "Use as secondary function" off sends its
+Primary in its button slot and keeps the factory code in its secondary slot (the report proven on the device).
 
-## 5. When it is applied
+## 5. Stored settings
 
-- Stored in Traction's settings as `bindings: {slot: code}` (only changed slots).
-- Reapplied with the controller mode after sleep, after Decky starts, and after an Armoury Crate switch, through the
-  existing reapplier (the controller forgets its settings on sleep).
-- Gamepad mode only. Switching to Desktop mode writes G-Helper's desktop defaults for the zones Traction changed
-  (desktop uses keyboard and mouse codes there); switching back to Gamepad writes the owner's set again.
-  Auto mode follows the same rule on each switch.
-  A change made while Desktop is on the pad is stored and its zones marked touched, not written (the Desktop slots
-  do not depend on it); the next Gamepad write puts them right.
-- Not written while an old Overdrive is installed (same block as the other controller rows).
+`bindings = {"gamepad": {<button>: {"primary": <action>, "secondary": <action>}}, "desktop": {...},
+"m1_secondary": bool, "m2_secondary": bool}`; missing entries mean factory. v1 settings are migrated: v1 back-button
+actions become that button's Gamepad Primary with its switch off; v1 combos become Gamepad Secondaries.
+The mode write is followed by the zones of that mode's set (changed or touched), as now.
 
-## 6. Tests
+## 6. Part B (after a device probe): Command Center and Armoury Crate buttons
 
-- Unit: action list codes, zone/slot packing (bytes match the probe's proven reports), validation refusals, only
-  changed zones written, reset writes 9 zones, desktop/gamepad switching, reapply after resume, the pad-gone reset.
-- Live on the Ally, Steam Big Picture in front: right back = B; Shift + A = Screenshot; reset; sleep and wake keeps
-  the mapping; Desktop and back keeps it.
+Not firmware-bindable; they send vendor events on the controller's 0x5A input report that a program must catch
+(on the Xbox Ally X the Armoury Crate/Library button sends code 147; codes for Command Center to be found by the
+probe). Traction's helper would read those reports and run the action itself: **Single press** and **Long press**,
+keyboard/mouse/Windows actions only (no gamepad buttons: Windows cannot fake one without an extra driver).
+First a probe: with Armoury Crate stopped, log what each press sends, and check what the device legend's defaults
+(Gaming Copilot, Push to Talk, Voice typing, Game Bar) come from.
 
-## 7. Out of scope
+## 7. Tests
 
-Per-game profiles, turbo (auto-fire), G-Helper hotkey actions (section 3), remapping the Xbox, View-long-press, ROG
-and Command Center buttons (not firmware-bindable).
+Unit: the v2 settings shape and v1 migration; per-mode slots; switch off/on for M1/M2; per-button and full reset;
+panel helpers. Live on the Ally (Steam Big Picture in front): A Primary = B; M1 + A Secondary = Screenshot; M1 switch
+off and M1 Primary = B; Desktop set differs from Gamepad; sleep and wake keeps both; reset all.
+
+## 8. Out of scope
+
+Per-game profiles, import/export, hold to repeat, the mappings overlay (M1/M2 + B), the Xbox button.
