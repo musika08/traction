@@ -1,11 +1,14 @@
-"""Button mapping model: turns the owner's choices into the controller's binding-zone slots.
+"""Button mapping model (Armoury Crate style): turns the owner's choices into the controller's binding-zone slots.
 
 A zone holds two buttons; its report carries four slots: first button, first button's combo, second button, second
-button's combo. Settings shape: {"back_left": <action id | "shift">, "back_right": <...>, "combos": {<button id>:
-<action id>}}; a missing key means the factory binding. "shift" is the factory code of the back button (02-8E left,
-02-8F right). A back button set to an action gets it in its button slot only; its combo slot keeps the factory Shift
-code (the zone-8 report proven on the device: 02-8E, 02-8E, 01-02, 02-8F for the right one as B). Only the Gamepad mode
-uses the owner's set; Desktop gets G-Helper's desktop defaults.
+button's combo. The combo slot is the button's Secondary function, the button slot its Primary. Settings shape:
+{"gamepad": {<button id>: {"primary": <action id>, "secondary": <action id>}}, "desktop": {...}, "m1_secondary": bool,
+"m2_secondary": bool}; a missing entry means the factory binding of that set (G-Helper gamepad or desktop defaults;
+the factory secondary is the same for both). The two back buttons (M1 = back_right 02-8F, M2 = back_left 02-8E) have a
+switch "use as secondary function" (default on, shared by both sets): on, both slots hold the factory Shift code; off,
+the button slot holds its Primary (Nothing when none) and the secondary slot keeps the Shift code (the zone-8 report
+proven on the device: 02-8E, 02-8E, 01-02, 02-8F for M1 as B). The v1 shape ({"back_left": <action id | "shift">,
+"back_right": ..., "combos": {<button id>: <action id>}}) is converted by clean().
 """
 
 # (id, label, code)
@@ -53,6 +56,10 @@ BUTTONS = [
 NONE = "00-00"
 SHIFT = {"back_left": "02-8E", "back_right": "02-8F"}
 BACK = tuple(SHIFT)
+SETS = ("gamepad", "desktop")
+FACTORY = "factory"
+_SWITCH = {"back_left": "m2_secondary", "back_right": "m1_secondary"}
+_SLOTS = ("primary", "secondary")
 _CODE = {a[0]: a[2] for a in ACTIONS}
 _BUTTON = {b[0]: b for b in BUTTONS}
 
@@ -76,54 +83,125 @@ _DESKTOP = {
 }
 
 
+def _blank() -> dict:
+    return {"gamepad": {}, "desktop": {}, "m1_secondary": True, "m2_secondary": True}
+
+
 def clean(raw) -> dict:
-    """Keep only known ids; anything else falls back to the factory binding. Never raises."""
-    out = {"back_left": "shift", "back_right": "shift", "combos": {}}
+    """Keep only known ids (v2 shape, or a v1 dict converted); never raises. Empty entries are dropped."""
+    out = _blank()
     if not isinstance(raw, dict):
         return out
-    for k in BACK:
+    if "gamepad" in raw or "desktop" in raw:
+        for name in SETS:
+            sec = raw.get(name)
+            if not isinstance(sec, dict):
+                continue
+            for bid, entry in sec.items():
+                if not (isinstance(bid, str) and bid in _BUTTON and isinstance(entry, dict)):
+                    continue
+                kept = {}
+                for slot in _SLOTS:
+                    v = entry.get(slot)
+                    if isinstance(v, str) and v in _CODE and not (slot == "secondary" and bid in BACK):
+                        kept[slot] = v
+                if kept:
+                    out[name][bid] = kept
+        for sw in _SWITCH.values():
+            if isinstance(raw.get(sw), bool):
+                out[sw] = raw[sw]
+        return out
+    for k in BACK:   # v1: a back button action becomes its gamepad Primary with the switch off
         v = raw.get(k)
-        if isinstance(v, str) and (v == "shift" or v in _CODE):
-            out[k] = v
+        if isinstance(v, str) and v != "shift" and v in _CODE:
+            out["gamepad"][k] = {"primary": v}
+            out[_SWITCH[k]] = False
     combos = raw.get("combos")
     if isinstance(combos, dict):
         for k, v in combos.items():
             if isinstance(k, str) and k in _BUTTON and k not in BACK and isinstance(v, str) and v in _CODE:
-                out["combos"][k] = v
+                out["gamepad"][k] = {"secondary": v}
     return out
 
 
-def _slots(bid: str, b: dict, desktop: bool) -> list:
-    """The button's slot and its combo slot."""
+def _set_name(set_name) -> str:
+    if set_name is True:   # v1 callers passed `desktop: bool`
+        return "desktop"
+    if set_name is False:
+        return "gamepad"
+    return set_name
+
+
+def _slots(bid: str, b: dict, set_name: str) -> list:
+    """The button's slot (Primary) and its combo slot (Secondary)."""
     base, combo = _GAMEPAD[bid]
-    if desktop:
-        return [_DESKTOP.get(bid, base), combo]
+    entry = b[set_name].get(bid, {})
     if bid in BACK:
-        v = b[bid]
-        return [SHIFT[bid] if v == "shift" else _CODE[v], combo]   # the combo slot stays the factory Shift code
-    c = b["combos"].get(bid)
-    return [base, _CODE[c] if c is not None else combo]
+        if b[_SWITCH[bid]]:
+            return [SHIFT[bid], SHIFT[bid]]
+        p = entry.get("primary")
+        return [_CODE[p] if p is not None else NONE, SHIFT[bid]]
+    if set_name == "desktop":
+        base = _DESKTOP.get(bid, base)
+    p, s = entry.get("primary"), entry.get("secondary")
+    return [_CODE[p] if p is not None else base, _CODE[s] if s is not None else combo]
 
 
-def zone_slots(zone: int, bindings: dict, desktop: bool) -> list:
-    """Four codes for the zone: first button, its combo, second button, its combo."""
+def zone_slots(zone: int, bindings: dict, set_name: str) -> list:
+    """Four codes for the zone in the given set: first button, its combo, second button, its combo."""
     b = clean(bindings)
+    name = _set_name(set_name)
     out: list = []
     for bid, _label, _z, _side in sorted((x for x in BUTTONS if x[2] == zone), key=lambda x: x[3]):
-        out += _slots(bid, b, desktop)
+        out += _slots(bid, b, name)
     return out
 
 
-def changed_zones(bindings: dict) -> list:
-    """Sorted zones where the owner chose something."""
+def zones_with_choices(bindings: dict) -> list:
+    """Sorted zones where the owner chose something in either set, or a back button's switch is off."""
     b = clean(bindings)
-    zones = set()
-    for k in BACK:
-        if b[k] != "shift":
+    zones = {_BUTTON[bid][2] for name in SETS for bid in b[name]}
+    for k, sw in _SWITCH.items():
+        if not b[sw]:
             zones.add(_BUTTON[k][2])
-    for k in b["combos"]:
-        zones.add(_BUTTON[k][2])
     return sorted(zones)
+
+
+changed_zones = zones_with_choices   # v1 name, until the callers move over
+
+
+def set_choice(bindings: dict, set_name: str, button: str, slot: str, action) -> dict:
+    """A new cleaned dict with the button's Primary or Secondary set; FACTORY (or None) removes it. Unknown ids,
+    a Secondary on a back button, or an unknown set leave the settings as they were."""
+    b = clean(bindings)
+    if set_name not in SETS or button not in _BUTTON or slot not in _SLOTS or (slot == "secondary" and button in BACK):
+        return b
+    if action is None or action == FACTORY:
+        entry = b[set_name].get(button)
+        if entry is not None:
+            entry.pop(slot, None)
+            if not entry:
+                del b[set_name][button]
+        return b
+    if isinstance(action, str) and action in _CODE:
+        b[set_name].setdefault(button, {})[slot] = action
+    return b
+
+
+def set_back_secondary(bindings: dict, side: str, on: bool) -> dict:
+    """A new cleaned dict with the "use as secondary function" switch of back_left (M2) / back_right (M1) set."""
+    b = clean(bindings)
+    if side in _SWITCH and isinstance(on, bool):
+        b[_SWITCH[side]] = on
+    return b
+
+
+def reset_button(bindings: dict, set_name: str, button: str) -> dict:
+    """A new cleaned dict with the button's Primary and Secondary in that set back to factory."""
+    b = clean(bindings)
+    if set_name in SETS:
+        b[set_name].pop(button, None)
+    return b
 
 
 def all_zones() -> list:
@@ -132,15 +210,16 @@ def all_zones() -> list:
 
 
 def keep_zones(old: dict, new: dict, zones) -> dict:
-    """`new`'s choices for the buttons in `zones`, `old`'s for every other button (a write that landed only in some
-    zones: the stored set matches what the controller holds)."""
+    """`new`'s choices for the buttons in `zones` (both sets; zone 8 also the back switches), `old`'s for every other
+    button (a write that landed only in some zones: the stored set matches what the controller holds)."""
     o, n = clean(old), clean(new)
     zones = set(zones)
-    out = {"back_left": o["back_left"], "back_right": o["back_right"], "combos": {}}
+    out = _blank()
     for bid, _label, zone, _side in BUTTONS:
         src = n if zone in zones else o
-        if bid in BACK:
-            out[bid] = src[bid]
-        elif bid in src["combos"]:
-            out["combos"][bid] = src["combos"][bid]
+        for name in SETS:
+            if bid in src[name]:
+                out[name][bid] = dict(src[name][bid])
+    for bid, sw in _SWITCH.items():
+        out[sw] = (n if _BUTTON[bid][2] in zones else o)[sw]
     return out

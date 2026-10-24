@@ -24,8 +24,8 @@ def _codes(text: str) -> list:
 def _defaults() -> set:
     codes = set()
     for zone in bindings.all_zones():
-        for desktop in (False, True):
-            codes.update(bindings.zone_slots(zone, {}, desktop))
+        for name in bindings.SETS:
+            codes.update(bindings.zone_slots(zone, {}, name))
     return codes
 
 
@@ -38,4 +38,4 @@ def test_allow_list_is_actions_plus_defaults():
 
 def test_factory_zones_match_gamepad_defaults():
     rows = re.findall(r"new\[\]\s*\{([^}]*)\}", _block("GamepadDefaults"))
-    assert [_codes(r) for r in rows] == [bindings.zone_slots(z, {}, False) for z in bindings.all_zones()]
+    assert [_codes(r) for r in rows] == [bindings.zone_slots(z, {}, "gamepad") for z in bindings.all_zones()]
