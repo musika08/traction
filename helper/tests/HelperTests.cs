@@ -69,12 +69,15 @@ namespace Traction.Helper.Tests
             public FakeServices Services = new FakeServices();
             public FakeHidBus Bus = new FakeHidBus();
             public FakeSystemControls Sys = new FakeSystemControls();
+            public FakePadCheck Pad = new FakePadCheck();
+            public readonly List<int> Sleeps = new List<int>();
             public TractionCore Core;
             public Rig() : this(true) { }
             public Rig(bool ally)
             {
-                Core = new TractionCore(Adl, Services, ally, ms => { });
+                Core = new TractionCore(Adl, Services, ally, ms => Sleeps.Add(ms));
                 Core.Hid = new AsusHid(Bus);
+                Core.PadCheck = Pad;
                 Core.SystemControls = Sys;
                 Core.ProductName = "ROG Ally X RC72LA_RC72LA";
             }
@@ -454,6 +457,227 @@ namespace Traction.Helper.Tests
             Equal(0, rig.Bus.Writes.Count, "nothing written");
         }
 
+        // ---------- button bindings (set_bindings) ----------
+
+        // A zone report as the probe built it: 5A D1 02 zone 2C, then the four 11-byte slots at 5, 16, 27, 38.
+        private static byte[] ZoneBytes(int zone, string s1, string s2, string s3, string s4)
+        {
+            var r = new byte[64];
+            new byte[] { 0x5A, 0xD1, 0x02, (byte)zone, 0x2C }.CopyTo(r, 0);
+            Bindings.Encode(s1).CopyTo(r, 5);
+            Bindings.Encode(s2).CopyTo(r, 16);
+            Bindings.Encode(s3).CopyTo(r, 27);
+            Bindings.Encode(s4).CopyTo(r, 38);
+            return r;
+        }
+
+        private static string SetLine(int id, string zone, string slots)
+        {
+            return "{\"id\":" + id + ",\"cmd\":\"set_bindings\",\"args\":{\"zone\":" + zone + ",\"slots\":" + slots + "}}";
+        }
+
+        // G-Helper's factory set, in the order the probe wrote it on the device (zone 8 first).
+        private static byte[][] FactoryBytes(bool xbox)
+        {
+            var l = new List<byte[]>();
+            var init = new byte[64];
+            init[0] = 0x5A;
+            System.Text.Encoding.ASCII.GetBytes("ASUS Tech.Inc.").CopyTo(init, 1);
+            l.Add(init);
+            l.Add(Padded(64, 0x5A, 0xD1, 0x0B, 0x01, 0x01));
+            l.Add(Padded(64, 0x5A, 0xD1, 0x01, 0x01, 0x01));
+            l.Add(ZoneBytes(8, "02-8E", "02-8E", "02-8F", "02-8F"));
+            l.Add(ZoneBytes(1, "01-09", "05-19", "01-0A", "04-02-82-23"));
+            l.Add(ZoneBytes(2, "01-0B", "04-04-8C-88-8A-05", "01-0C", "04-04-8C-88-8A-06"));
+            l.Add(ZoneBytes(3, "01-07", "00-00", "01-08", "04-04-8C-88-8A-0C"));
+            l.Add(ZoneBytes(4, "01-05", "00-00", "01-06", "00-00"));
+            l.Add(ZoneBytes(5, "01-01", "00-00", "01-02", "00-00"));
+            l.Add(ZoneBytes(6, "01-03", "04-03-82-88-1B", "01-04", "04-04-8C-88-8A-44"));
+            l.Add(ZoneBytes(7, "01-11", "00-00", "01-12", "00-00"));
+            l.Add(ZoneBytes(9, "01-0D", "00-00", "01-0E", "00-00"));
+            l.Add(Padded(64, 0x5A, 0xD1, 0x0F, 0x20));
+            l.Add(Padded(64, 0x5A, 0xD1, 0x04, 0x04, 0x00, 0x64, 0x00, 0x64));
+            l.Add(Padded(64, 0x5A, 0xD1, 0x05, 0x04, 0x00, 0x64, 0x00, 0x64));
+            l.Add(Padded(64, 0x5A, 0xD1, 0x06, 0x02, 0x64, 0x64));
+            if (xbox) l.Add(Padded(64, 0x5A, 0xD1, 0x1C, 0x02, 0x64, 0x64));
+            return l.ToArray();
+        }
+
+        // G-Helper DecodeBinding, as the probe's Code() ported it.
+        public static void Bindings_EncodeSlots()
+        {
+            Equal("01-02-00-00-00-00-00-00-00-00-00", Hex(Bindings.Encode("01-02")), "gamepad button");
+            Equal("02-00-5A-00-00-00-00-00-00-00-00", Hex(Bindings.Encode("02-5A")), "keyboard key");
+            Equal("03-00-00-00-01-00-00-00-00-00-00", Hex(Bindings.Encode("03-01")), "mouse");
+            Equal("04-00-00-00-00-03-82-88-1B-00-00", Hex(Bindings.Encode("04-03-82-88-1B")), "key combo");
+            Equal("04-00-00-00-00-02-82-23-00-00-00", Hex(Bindings.Encode("04-02-82-23")), "two-key combo");
+            Equal("05-00-00-19-00-00-00-00-00-00-00", Hex(Bindings.Encode("05-19")), "media key");
+            Equal("00-00-00-00-00-00-00-00-00-00-00", Hex(Bindings.Encode("00-00")), "nothing");
+            foreach (string code in Bindings.Allowed) Equal(11, Bindings.Encode(code).Length, "slot length " + code);
+            True(Bindings.IsAllowed("02-8E") && Bindings.IsAllowed("02-8F"), "Shift codes allowed");
+            True(Bindings.IsAllowed("02-88") && Bindings.IsAllowed("04-04-8C-88-8A-44"), "default codes allowed");
+            True(!Bindings.IsAllowed("01-FF") && !Bindings.IsAllowed("01-02 ") && !Bindings.IsAllowed(null), "others refused");
+        }
+
+        public static void SetBindings_Zone8Bytes()
+        {
+            var rig = new Rig();
+            var r = rig.Send(SetLine(1, "8", "[\"02-8E\",\"02-8E\",\"01-02\",\"01-02\"]"));
+            True(Ok(r), "ok: " + Msg(r));
+            Equal(8, ((Dictionary<string, object>)r["data"])["zone"], "echoed zone");
+            var expected = Padded(64, 0x5A, 0xD1, 0x02, 0x08, 0x2C);
+            expected[5] = 0x02; expected[7] = 0x8E;     // left back button: Shift
+            expected[16] = 0x02; expected[18] = 0x8E;   // its combo: Shift
+            expected[27] = 0x01; expected[28] = 0x02;   // right back button: B
+            expected[38] = 0x01; expected[39] = 0x02;   // its combo: B
+            WritesAre(rig.Bus, "zone 8", expected);
+            Equal(2, rig.Pad.Calls, "checked before the write and once after");
+            SeqEqual(new[] { "500" }, rig.Sleeps.ConvertAll(n => n.ToString()), "one 500 ms wait");
+        }
+
+        public static void SetBindings_RefusesBadInputWithoutWriting()
+        {
+            var rig = new Rig();
+            string four = "[\"01-01\",\"00-00\",\"01-02\",\"00-00\"]";
+            foreach (string line in new[] {
+                SetLine(1, "5", "[\"01-01\",\"01-FF\",\"01-02\",\"00-00\"]"),
+                SetLine(2, "0", four),
+                SetLine(3, "10", four),
+                SetLine(4, "-1", four),
+                SetLine(5, "\"5\"", four),
+                SetLine(6, "5.5", four),
+                SetLine(7, "null", four),
+                SetLine(8, "5", "[\"01-01\",\"00-00\",\"01-02\"]"),
+                SetLine(9, "5", "[\"01-01\",\"00-00\",\"01-02\",\"00-00\",\"00-00\"]"),
+                SetLine(10, "5", "[\"01-01\",1,\"01-02\",\"00-00\"]"),
+                SetLine(11, "5", "[\"01-01\",null,\"01-02\",\"00-00\"]"),
+                SetLine(12, "5", "\"01-01\""),
+                SetLine(13, "5", "null"),
+                SetLine(14, "5", "[\"01-01\",\"00-00\",\"01-02\",\"0-0\"]"),
+                "{\"id\":15,\"cmd\":\"set_bindings\",\"args\":{\"zone\":5}}",
+                "{\"id\":16,\"cmd\":\"set_bindings\",\"args\":{\"slots\":" + four + "}}",
+                "{\"id\":17,\"cmd\":\"set_bindings\",\"args\":{\"zone\":5,\"slots\":" + four + ",\"x\":1}}" })
+            {
+                var r = rig.Send(line);
+                True(!Ok(r), "refused: " + line);
+                True(Msg(r).StartsWith("Refused"), "says refused: " + Msg(r));
+            }
+            True(Msg(rig.Send(SetLine(18, "5", "[\"01-01\",\"01-FF\",\"01-02\",\"00-00\"]"))).Contains("01-FF"), "names the code");
+            Equal(0, rig.Bus.Lists, "refusals never reached the HID layer");
+            Equal(0, rig.Bus.Writes.Count, "nothing written");
+            Equal(0, rig.Pad.Calls, "no gamepad check");
+        }
+
+        // Review Focus 4: the gamepad is gone after the write -> the factory set, in order, and the reset reply.
+        public static void SetBindings_PadGone_WritesFactorySet()
+        {
+            foreach (bool xbox in new[] { false, true })
+            {
+                var rig = new Rig();
+                if (xbox) rig.Core.ProductName = XboxProduct;
+                rig.Pad.Answers.Enqueue(true);   // seen before the write
+                rig.Pad.Then = false;            // gone afterwards
+                var r = rig.Send(SetLine(1, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
+                True(!Ok(r), "not ok");
+                Equal("The controller stopped responding, so buttons were reset to the factory set.", Msg(r), "message");
+                Equal(true, ((Dictionary<string, object>)r["data"])["reset"], "data.reset");
+                var expected = new List<byte[]> { ZoneBytes(5, "01-01", "01-02", "01-02", "00-00") };
+                expected.AddRange(FactoryBytes(xbox));
+                WritesAre(rig.Bus, xbox ? "Xbox reset" : "reset", expected.ToArray());
+                Equal(11, rig.Pad.Calls, "one check before, ten after");
+                Equal(10, rig.Sleeps.Count, "ten waits");
+                foreach (int ms in rig.Sleeps) Equal(500, ms, "500 ms each (5 s in all)");
+            }
+        }
+
+        // A failed reset write does not stop the rest of the factory set, and the reply says the reset failed.
+        public static void SetBindings_ResetWriteFails_TriesTheRest()
+        {
+            var rig = new Rig();
+            rig.Pad.Answers.Enqueue(true);
+            rig.Pad.Then = false;
+            var bus = new FailAfterBus(1);   // the zone report goes through, every reset write fails
+            rig.Core.Hid = new AsusHid(bus);
+            var r = rig.Send(SetLine(1, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
+            True(!Ok(r), "not ok");
+            True(Msg(r).Contains("factory reset failed") && Msg(r).Contains("feature write failed"), "message: " + Msg(r));
+            Equal(false, ((Dictionary<string, object>)r["data"])["reset"], "data.reset false");
+            Equal(1 + FactoryBytes(false).Length, bus.Writes.Count, "every reset report was tried");
+        }
+
+        private class FailAfterBus : FakeHidBus
+        {
+            private readonly int okWrites;
+            public FailAfterBus(int okWrites) { this.okWrites = okWrites; }
+            public override bool SetFeature(string path, byte[] report, out string err)
+            {
+                base.SetFeature(path, report, out err);
+                if (Writes.Count <= okWrites) return true;
+                err = "feature write failed";
+                return false;
+            }
+        }
+
+        public static void SetBindings_PadBackOnLaterPoll_Ok()
+        {
+            var rig = new Rig();
+            rig.Pad.Answers.Enqueue(true);
+            rig.Pad.Answers.Enqueue(false);
+            rig.Pad.Answers.Enqueue(false);
+            rig.Pad.Then = true;
+            var r = rig.Send(SetLine(1, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
+            True(Ok(r), "ok: " + Msg(r));
+            Equal(1, rig.Bus.Writes.Count, "only the zone report");
+            Equal(4, rig.Pad.Calls, "seen on the third poll");
+            Equal(3, rig.Sleeps.Count, "three waits");
+        }
+
+        // Without a gamepad to watch there is no safety net, so nothing is written.
+        public static void SetBindings_NoPadBeforeWrite_Refused()
+        {
+            var rig = new Rig();
+            rig.Pad.Then = false;
+            var r = rig.Send(SetLine(1, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
+            True(!Ok(r), "refused");
+            Equal(TractionCore.PadNotSeenMessage, Msg(r), "message");
+            Equal(0, rig.Bus.Writes.Count, "nothing written");
+            Equal(0, rig.Sleeps.Count, "no wait");
+
+            rig.Core.PadCheck = null;
+            r = rig.Send(SetLine(2, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
+            True(!Ok(r) && Msg(r) == TractionCore.ControllerUnavailable, "no pad check: " + Msg(r));
+            Equal(0, rig.Bus.Writes.Count, "nothing written");
+        }
+
+        public static void SetBindings_ControllerProblems()
+        {
+            var rig = new Rig();
+            rig.Bus.Fail = true;
+            var r = rig.Send(SetLine(1, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
+            True(!Ok(r) && Msg(r).Contains("feature write failed"), "write error passed on: " + Msg(r));
+            Equal(1, rig.Bus.Writes.Count, "one attempt");
+
+            var gone = new Rig();
+            gone.Bus.Devices.RemoveAll(c => c.Path == FakeHidBus.MatchPath);
+            r = gone.Send(SetLine(2, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
+            Equal("Controller not found", Msg(r), "not found");
+            Equal(0, gone.Bus.Writes.Count, "nothing written");
+
+            // The zone report is 49 bytes; a shorter collection is refused before anything is sent.
+            var small = new Rig();
+            small.Bus = new FakeHidBus(48);
+            small.Core.Hid = new AsusHid(small.Bus);
+            r = small.Send(SetLine(3, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
+            True(!Ok(r) && Msg(r).Contains("48 bytes"), "short report refused: " + Msg(r));
+            Equal(0, small.Bus.Writes.Count, "nothing written");
+
+            var not = new Rig(false);
+            r = not.Send(SetLine(4, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
+            Equal(TractionCore.NotAllyMessage, Msg(r), "refused off the Ally");
+            Equal(0, not.Bus.Writes.Count, "nothing written");
+            Equal(0, not.Pad.Calls, "no gamepad check");
+        }
+
         // ---------- touchscreen and foreground ----------
 
         public static void Touchscreen_SetReturnsAtOnce()
@@ -560,7 +784,7 @@ namespace Traction.Helper.Tests
                 if (read) True(Msg(r) != TractionCore.NotAllyMessage, cmd + " is a read and must not be refused as non-Ally");
                 else { True(!Ok(r) && Msg(r) == TractionCore.NotAllyMessage, cmd + " refused: " + Msg(r)); refused++; }
             }
-            Equal(5, refused, "every non-read command refused");
+            Equal(6, refused, "every non-read command refused");
             Equal(0, rig.Bus.Writes.Count, "no HID write");
             Equal(0, rig.Adl.Sets.Count, "no ADL write");
             Equal(0, rig.Services.Changes().Count, "no service change");

@@ -24,6 +24,7 @@ namespace Traction.Helper
             {
                 var core = new TractionCore(adl, new ServiceHardware(), IsAlly(product));
                 core.Hid = new AsusHid();
+                core.PadCheck = new XInputPadCheck();
                 core.SystemControls = new SystemControls();
                 core.ProductName = product;
                 Run(input, output, core);

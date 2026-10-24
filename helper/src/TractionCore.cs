@@ -39,6 +39,7 @@ namespace Traction.Helper
             { "set_vibration", new[] { "strength" } },
             { "get_touchscreen", None },
             { "set_touchscreen", new[] { "enabled" } },
+            { "set_bindings", new[] { "zone", "slots" } },
         };
 
         private static readonly string[] TopLevel = { "id", "cmd", "args" };
@@ -62,6 +63,12 @@ namespace Traction.Helper
         // rather than System, which would hide the System namespace inside this class.
         public ISystemControls SystemControls { get; set; }
 
+        // Whether Windows still sees the gamepad (set_bindings' safety net). Set after construction; null means
+        // set_bindings is not available.
+        public IPadCheck PadCheck { get; set; }
+
+        public const string PadNotSeenMessage = "Windows does not see the gamepad, so the buttons were not changed.";
+
         public const string SystemUnavailable = "Touchscreen and graphics control is not available.";
 
         public static IEnumerable<string> CommandNames { get { return Commands.Keys; } }
@@ -72,6 +79,7 @@ namespace Traction.Helper
         private readonly bool ally;
         private readonly JavaScriptSerializer json = new JavaScriptSerializer();
         private readonly ArmouryCommands armoury;
+        private readonly Action<int> sleep;
 
         public TractionCore(IAdl adl, IServices services, bool ally)
             : this(adl, services, ally, System.Threading.Thread.Sleep)
@@ -83,7 +91,8 @@ namespace Traction.Helper
         {
             this.adl = adl;
             this.ally = ally;
-            this.armoury = new ArmouryCommands(services, sleep ?? System.Threading.Thread.Sleep);
+            this.sleep = sleep ?? System.Threading.Thread.Sleep;
+            this.armoury = new ArmouryCommands(services, this.sleep);
         }
 
         // Never throws: every line gets exactly one single-line reply.
@@ -152,6 +161,7 @@ namespace Traction.Helper
                 case "set_vibration": return SetVibration(id, args);
                 case "get_touchscreen": return GetTouchscreen(id);
                 case "set_touchscreen": return SetTouchscreen(id, args);
+                case "set_bindings": return SetBindings(id, args);
             }
             return ProtocolKit.Reply(id, false, "Refused: unknown command '" + cmd + "'.", null);
         }
@@ -250,20 +260,81 @@ namespace Traction.Helper
         // failure stops and is reported.
         private string WriteController(object id, Dictionary<string, object> data, params byte[][] reports)
         {
-            if (Hid == null) return ProtocolKit.Reply(id, false, ControllerUnavailable, null);
+            string err = SendReports(true, reports);
+            return err != null ? ProtocolKit.Reply(id, false, err, null) : ProtocolKit.Reply(id, true, "", data);
+        }
+
+        // Null when every report was sent, otherwise the first error. Nothing is sent unless every report fits the
+        // feature report. stopOnError false still tries the remaining reports after a failure (the factory reset).
+        private string SendReports(bool stopOnError, params byte[][] reports)
+        {
+            if (Hid == null) return ControllerUnavailable;
             HidInfo info = Hid.Find();
-            if (info == null || !info.Found) return ProtocolKit.Reply(id, false, AsusHid.NotFound, null);
+            if (info == null || !info.Found) return AsusHid.NotFound;
             foreach (byte[] r in reports)
                 if (info.FeatureLength < r.Length)
-                    return ProtocolKit.Reply(id, false, "Refused: the controller's feature report is only " + info.FeatureLength + " bytes.", null);
+                    return "Refused: the controller's feature report is only " + info.FeatureLength + " bytes.";
+            string first = null;
             foreach (byte[] r in reports)
             {
                 var padded = new byte[info.FeatureLength];
                 Array.Copy(r, padded, r.Length);
                 string err;
-                if (!Hid.SetFeature(padded, out err)) return ProtocolKit.Reply(id, false, err ?? "The controller refused the report.", null);
+                if (Hid.SetFeature(padded, out err)) continue;
+                if (first == null) first = err ?? "The controller refused the report.";
+                if (stopOnError) break;
             }
-            return ProtocolKit.Reply(id, true, "", data);
+            return first;
+        }
+
+        // ---------- button bindings (G-Helper app/Ally/AllyControl.cs BindZone; see Bindings.cs) ----------
+
+        public const int PadPolls = 10;          // 10 x 500 ms = 5 s, as the probe waited
+        public const int PadPollMs = 500;
+
+        // Writes one zone, then watches the gamepad: if Windows no longer sees it within 5 s, the full factory set
+        // is written at once. Refused without a write when the gamepad is not seen beforehand (no safety net).
+        private string SetBindings(object id, Dictionary<string, object> args)
+        {
+            int zone;
+            string err;
+            if (!ProtocolKit.GetInt(args, "zone", out zone, out err)) return ProtocolKit.Reply(id, false, err, null);
+            if (zone < 1 || zone > 9) return ProtocolKit.Reply(id, false, "Refused: zone must be a whole number from 1 to 9.", null);
+            object raw;
+            if (!args.TryGetValue("slots", out raw)) return ProtocolKit.Reply(id, false, "Refused: 'slots' is required.", null);
+            var list = raw as object[];
+            if (list == null || list.Length != 4) return ProtocolKit.Reply(id, false, "Refused: 'slots' must be a list of 4 binding codes.", null);
+            var slots = new string[4];
+            for (int i = 0; i < 4; i++)
+            {
+                slots[i] = list[i] as string;
+                if (slots[i] == null) return ProtocolKit.Reply(id, false, "Refused: 'slots' must be a list of 4 binding codes.", null);
+                if (!Bindings.IsAllowed(slots[i])) return ProtocolKit.Reply(id, false, "Refused: unknown binding code '" + slots[i] + "'.", null);
+            }
+
+            if (Hid == null || PadCheck == null) return ProtocolKit.Reply(id, false, ControllerUnavailable, null);
+            if (!PadCheck.Present()) return ProtocolKit.Reply(id, false, PadNotSeenMessage, null);
+
+            err = SendReports(true, Bindings.ZoneReport(zone, slots));
+            if (err != null) return ProtocolKit.Reply(id, false, err, null);
+
+            for (int i = 0; i < PadPolls; i++)
+            {
+                sleep(PadPollMs);
+                if (PadCheck.Present())
+                {
+                    var d = new Dictionary<string, object>();
+                    d["zone"] = zone;
+                    return ProtocolKit.Reply(id, true, "", d);
+                }
+            }
+
+            err = SendReports(false, Bindings.FactoryReset(IsXbox()));
+            var reset = new Dictionary<string, object>();
+            reset["reset"] = err == null;
+            if (err != null)
+                return ProtocolKit.Reply(id, false, "The controller stopped responding and the factory reset failed: " + err, reset);
+            return ProtocolKit.Reply(id, false, Bindings.ResetMessage, reset);
         }
 
         // ---------- touchscreen and foreground app ----------

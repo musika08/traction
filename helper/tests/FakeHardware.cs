@@ -115,12 +115,26 @@ namespace Traction.Helper.Tests
             return new List<HidCollection>(Devices);
         }
 
-        public bool SetFeature(string path, byte[] report, out string err)
+        public virtual bool SetFeature(string path, byte[] report, out string err)
         {
             err = null;
             Writes.Add(new KeyValuePair<string, byte[]>(path, (byte[])report.Clone()));
             if (Fail) { err = "feature write failed"; return false; }
             return true;
+        }
+    }
+
+    // XInput pad 0 stand-in: answers from the queue in order, then Then for every later call.
+    public class FakePadCheck : IPadCheck
+    {
+        public readonly Queue<bool> Answers = new Queue<bool>();
+        public bool Then = true;
+        public int Calls;
+
+        public bool Present()
+        {
+            Calls++;
+            return Answers.Count > 0 ? Answers.Dequeue() : Then;
         }
     }
 
