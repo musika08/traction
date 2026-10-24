@@ -57,24 +57,31 @@ export function armouryDisabled(disabled: boolean, blocked: string | undefined):
 
 // ---------- Buttons ----------
 
-export const BACK_LEFT_LABEL = 'Left back button';
-export const BACK_RIGHT_LABEL = 'Right back button';
-export const COMBOS_LABEL = 'Combos';
-export const RESET_BUTTONS_LABEL = 'Reset buttons';
-export const COMBOS_NEED_SHIFT = 'Combos need a back button set to Shift.';
-export const COMBOS_HELP = 'Changing one combo puts the others of the same button pair back to their factory action.';
+export const MAPPING_SET_LABEL = 'Mapping set';
+export const RESET_BUTTON_LABEL = 'Reset to factory';
+export const RESET_ALL_LABEL = 'Reset all buttons';
+export const BACK_SECONDARY_LABEL = 'Use as secondary function';
+export const SECONDARY_NOTE = 'Secondary functions need a back button set to Use as secondary function.';
+export const FACTORY_LABEL = 'Factory';
 
-// The combo list closes only when the rows cannot be used at all (blocked by an old Overdrive, helper unavailable);
+export const SET_OPTIONS: { data: string; label: string }[] = [
+  { data: 'gamepad', label: 'Gamepad' },
+  { data: 'desktop', label: 'Desktop' },
+];
+
+// The button list closes only when the rows cannot be used at all (blocked by an old Overdrive, helper unavailable);
 // while a change is being written it stays open and only its pickers are disabled.
-export function combosCollapsed(blocked: string | undefined, unavailable: string | undefined): boolean {
+export function buttonsCollapsed(blocked: string | undefined, unavailable: string | undefined): boolean {
   return !!blocked || !!unavailable;
 }
 
+export type ButtonEntry = { primary: string; secondary: string };
+
 export type ButtonsState = {
-  back_left: string;
-  back_right: string;
-  combos: Record<string, string>;
-  changed: number;
+  live: string;
+  m1_secondary: boolean;
+  m2_secondary: boolean;
+  sets: Record<string, Record<string, ButtonEntry>>;
 };
 
 // What a button can do (ids and order as in the backend's bindings table).
@@ -124,8 +131,8 @@ export const ACTIONS: { data: string; label: string }[] = [
   { data: 'touch_keyboard', label: 'Show touch keyboard' },
 ];
 
-// The buttons that have a combo (every button except the two back buttons), in the backend's order.
-export const COMBO_BUTTONS: { data: string; label: string }[] = [
+// One row per button, in the order of the panel (M1 and M2 last).
+export const BUTTON_ROWS: { data: string; label: string }[] = [
   { data: 'du', label: 'D-pad up' },
   { data: 'dd', label: 'D-pad down' },
   { data: 'dl', label: 'D-pad left' },
@@ -142,22 +149,66 @@ export const COMBO_BUTTONS: { data: string; label: string }[] = [
   { data: 'menu', label: 'Menu' },
   { data: 'lt', label: 'LT' },
   { data: 'rt', label: 'RT' },
+  { data: 'back_right', label: 'M1 (right back button)' },
+  { data: 'back_left', label: 'M2 (left back button)' },
 ];
 
-export function backButtonOptions(): { data: string; label: string }[] {
-  return [{ data: 'shift', label: 'Shift (combos)' }, ...ACTIONS];
+export function isBackButton(button: string): boolean {
+  return button === 'back_left' || button === 'back_right';
 }
 
-export function comboOptions(): { data: string; label: string }[] {
-  return [{ data: 'unchanged', label: 'Unchanged' }, ...ACTIONS];
+// Picker options for a Primary or Secondary: Factory first, then the actions.
+export function actionOptions(): { data: string; label: string }[] {
+  return [{ data: 'factory', label: FACTORY_LABEL }, ...ACTIONS];
 }
 
-// Combos are reached through a back button set to Shift; with neither set, the stored combos stay but do nothing.
-export function combosNote(b: { back_left?: string; back_right?: string } | undefined): string {
-  if (!b) return '';
-  return b.back_left === 'shift' || b.back_right === 'shift' ? '' : COMBOS_NEED_SHIFT;
+function actionLabel(id: string | undefined, labels: Record<string, string>): string {
+  if (!id || id === 'factory') return FACTORY_LABEL;
+  return labels[id] ?? id;
 }
 
-export function changedLabel(n: number | undefined): string {
-  return n && n > 0 ? n + ' changed' : 'None changed';
+// "Primary / Secondary" with "Factory" where the owner has no choice; `single` (M1, M2) shows only the Primary.
+export function rowSummary(
+  entry: { primary?: string; secondary?: string } | undefined,
+  labels: Record<string, string>,
+  single = false,
+): string {
+  const p = actionLabel(entry?.primary, labels);
+  return single ? p : p + ' / ' + actionLabel(entry?.secondary, labels);
+}
+
+export function actionLabels(): Record<string, string> {
+  const m: Record<string, string> = {};
+  for (const a of ACTIONS) m[a.data] = a.label;
+  return m;
+}
+
+// The back button's own switch (shared by both sets): on means it works as the secondary function (Shift).
+export function backSwitchOn(button: string, state: { m1_secondary?: boolean; m2_secondary?: boolean }): boolean {
+  if (button === 'back_right') return !!state.m1_secondary;
+  if (button === 'back_left') return !!state.m2_secondary;
+  return false;
+}
+
+// M1 and M2 keep their Primary for when the switch is off; while it is on they are the Shift key.
+export function primaryEnabled(button: string, state: { m1_secondary?: boolean; m2_secondary?: boolean }): boolean {
+  return !backSwitchOn(button, state);
+}
+
+// The list line of a button: M1 and M2 show the Primary only, or the switch while it is on.
+export function buttonSummary(
+  button: string,
+  entry: { primary?: string; secondary?: string } | undefined,
+  state: { m1_secondary?: boolean; m2_secondary?: boolean },
+  labels: Record<string, string>,
+): string {
+  if (!isBackButton(button)) return rowSummary(entry, labels);
+  return backSwitchOn(button, state) ? BACK_SECONDARY_LABEL : rowSummary(entry, labels, true);
+}
+
+// Secondary functions are reached through a back button used as the secondary function; with neither, the stored
+// Secondaries stay (and stay editable) but do nothing.
+export function secondaryNote(state: { m1_secondary?: boolean; m2_secondary?: boolean } | undefined): string {
+  if (!state) return '';
+  return state.m1_secondary || state.m2_secondary ? '' : SECONDARY_NOTE;
 }

@@ -15,30 +15,33 @@ import {
   ARMOURY_BUSY,
   ARMOURY_DESCRIPTION,
   ARMOURY_LABEL,
-  BACK_LEFT_LABEL,
-  BACK_RIGHT_LABEL,
-  COMBOS_HELP,
-  COMBOS_LABEL,
-  COMBO_BUTTONS,
+  BACK_SECONDARY_LABEL,
+  BUTTON_ROWS,
   CONTROLLER_NOT_FOUND,
   CONTROLLER_OPTIONS,
   ButtonsState,
   ControllerMode,
   GRIP_VIBRATION_DESCRIPTION,
+  MAPPING_SET_LABEL,
   NOT_ALLY,
-  RESET_BUTTONS_LABEL,
+  RESET_ALL_LABEL,
+  RESET_BUTTON_LABEL,
+  SET_OPTIONS,
   TOUCHSCREEN_DESCRIPTION,
   TOUCH_POLL_MS,
   TOUCH_TIMEOUT_TEXT,
+  actionLabels,
+  actionOptions,
   armouryChecked,
   armouryDisabled,
-  backButtonOptions,
-  changedLabel,
-  comboOptions,
-  combosCollapsed,
-  combosNote,
+  backSwitchOn,
+  buttonSummary,
+  buttonsCollapsed,
   controllerBanner,
   controllerModeDescription,
+  isBackButton,
+  primaryEnabled,
+  secondaryNote,
   touchscreenCheck,
 } from './controls';
 import { PickerOption, choose, focusIndex, pressCancel, pressRow, rowValue } from './picker';
@@ -66,9 +69,10 @@ const getState = callable<[], State>('get_state');
 const setControllerMode = callable<[ControllerMode], Result>('set_controller_mode');
 const setGripVibration = callable<[boolean], Result>('set_grip_vibration');
 const setTouchscreen = callable<[boolean], Result>('set_touchscreen');
-const setBackButton = callable<['left' | 'right', string], Result>('set_back_button');
-const setCombo = callable<[string, string], Result>('set_combo');
-const resetButtons = callable<[], Result>('reset_buttons');
+const setButton = callable<[string, string, string, string], Result>('set_button');
+const setBackSecondary = callable<['left' | 'right', boolean], Result>('set_back_secondary');
+const resetButton = callable<[string, string], Result>('reset_button');
+const resetAllButtons = callable<[], Result>('reset_all_buttons');
 const setArmouryReplaced = callable<[boolean], Result>('set_armoury_replaced');
 
 const UNAVAILABLE_RECHECK_MS = 5000;
@@ -220,37 +224,41 @@ function InlinePicker<T>(props: {
   );
 }
 
-// "Combos  3 changed ▾": expands one inline picker per button (Unchanged, then the actions) inside the panel.
-// `collapsed` (blocked, helper unavailable) closes the list and its row; `disabled` (a change being written, an
-// Armoury switch) only disables the pickers, so the list stays open while a combo is written.
-function CombosList(props: {
-  buttons: ButtonsState;
+// One button: "Label  Primary / Secondary ▾". Pressing it expands, inline, a Primary picker and a Secondary picker
+// ("Factory" first, then the actions) and "Reset to factory"; M1 and M2 have only a Primary (enabled while their
+// switch is off) and the "Use as secondary function" toggle. `collapsed` closes the row; `disabled` (a change being
+// written) only disables what is inside, so the row stays open while a change is written.
+function ButtonRow(props: {
+  button: { data: string; label: string };
+  summary: string;
+  entry: { primary: string; secondary: string };
+  open: boolean;
   collapsed: boolean;
   disabled: boolean;
-  onChange: (button: string, action: string) => void;
+  primaryOn: boolean;
+  switchOn: boolean;
+  onToggleOpen: () => void;
+  onPick: (slot: string, action: string) => void;
+  onSwitch: () => void;
+  onReset: () => void;
 }) {
-  const { buttons, collapsed, disabled, onChange } = props;
-  const [open, setOpen] = useState(false);
+  const { button, summary, entry, open, collapsed, disabled, primaryOn, switchOn } = props;
   const rowRef = useRef<HTMLDivElement>(null);
   const wasOpen = useRef(false);
-  const options = comboOptions();
-
-  useEffect(() => {
-    if (collapsed && open) setOpen(false);
-  }, [collapsed, open]);
+  const options = actionOptions();
+  const back = isBackButton(button.data);
 
   useEffect(() => {
     if (!open && wasOpen.current) rowRef.current?.focus();
     wasOpen.current = open;
   }, [open]);
 
-  const toggle = () => setOpen((o) => pressRow(o, collapsed));
   const cancel = (evt: CustomEvent) => {
     const r = pressCancel(open);
     if (!r.handled) return;
     evt.preventDefault();
     evt.stopPropagation();
-    setOpen(r.open);
+    props.onToggleOpen();
   };
 
   return (
@@ -271,31 +279,68 @@ function CombosList(props: {
             color: collapsed ? '#8b929a' : '#dcdedf',
             fontSize: '14px',
           }}
-          onActivate={toggle}
-          onClick={toggle}
+          onActivate={props.onToggleOpen}
+          onClick={props.onToggleOpen}
           onCancelButton={cancel}
           onOKActionDescription={open ? 'Close' : 'Open'}
         >
-          <span style={{ whiteSpace: 'nowrap' }}>{COMBOS_LABEL}</span>
-          <span style={{ color: collapsed ? '#8b929a' : '#ffffff', whiteSpace: 'nowrap' }}>
-            {changedLabel(buttons.changed) + (open ? ' ▴' : ' ▾')}
+          <span style={{ whiteSpace: 'nowrap', flex: '0 1 auto', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {button.label}
+          </span>
+          <span
+            style={{
+              color: collapsed ? '#8b929a' : '#ffffff',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {summary + (open ? ' ▴' : ' ▾')}
           </span>
         </Focusable>
       </PanelSectionRow>
-      <Note text={COMBOS_HELP} />
-      {open &&
-        COMBO_BUTTONS.map((b) => (
-          <PanelSectionRow key={b.data}>
+      {open && (
+        <>
+          {back && (
+            <PanelSectionRow>
+              <ToggleField
+                label={BACK_SECONDARY_LABEL}
+                checked={switchOn}
+                disabled={disabled || collapsed}
+                onChange={props.onSwitch}
+              />
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
             <InlinePicker
-              label={b.label}
+              label="Primary"
               options={options}
-              value={buttons.combos?.[b.data] ?? 'unchanged'}
-              disabled={disabled || collapsed}
-              unknownText="Unchanged"
-              onChange={(v) => onChange(b.data, v)}
+              value={entry.primary}
+              disabled={disabled || collapsed || !primaryOn}
+              unknownText="Factory"
+              onChange={(v) => props.onPick('primary', v)}
             />
           </PanelSectionRow>
-        ))}
+          {!back && (
+            <PanelSectionRow>
+              <InlinePicker
+                label="Secondary"
+                options={options}
+                value={entry.secondary}
+                disabled={disabled || collapsed}
+                unknownText="Factory"
+                onChange={(v) => props.onPick('secondary', v)}
+              />
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={disabled || collapsed} onClick={props.onReset}>
+              {RESET_BUTTON_LABEL}
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
+      )}
     </>
   );
 }
@@ -309,6 +354,9 @@ function Content() {
   // The target while a toggle's call runs, so a failed change falls back to the stored value.
   const [toggleTarget, setToggleTarget] = useState<Record<string, boolean | undefined>>({});
   const [armouryBusy, setArmouryBusy] = useState(armouryPending !== null);
+  // The mapping set being edited (null: the one on the pad now) and the button row that is expanded.
+  const [pickedSet, setPickedSet] = useState<string | null>(null);
+  const [openButton, setOpenButton] = useState<string | null>(null);
   const mounted = useRef(true);
 
   const setStatus = (key: string, r: Result, okText = 'Applied.') => {
@@ -452,11 +500,16 @@ function Content() {
 
   // ---------- actions ----------
 
-  const toggleSetting = async (key: string, stored: boolean, call: (on: boolean) => Promise<Result>) => {
+  const toggleSetting = async (
+    key: string,
+    stored: boolean,
+    call: (on: boolean) => Promise<Result>,
+    statusKey: string = key,
+  ) => {
     // A single press; the target is always the opposite of the stored value, whatever the toggle reported.
     const on = !stored;
     setToggleTarget((t) => ({ ...t, [key]: on }));
-    await run(key, () => call(on));
+    await run(statusKey, () => call(on));
     if (mounted.current) setToggleTarget((t) => ({ ...t, [key]: undefined }));
   };
 
@@ -494,8 +547,9 @@ function Content() {
   };
 
   const buttons = state.buttons;
-  const backOptions = backButtonOptions();
-  const comboNote = buttons ? combosNote(buttons) : '';
+  const labels = actionLabels();
+  const editSet = pickedSet ?? buttons?.live ?? 'gamepad';
+  const collapsedButtons = buttonsCollapsed(state.blocked, unavailable);
 
   const toggleArmoury = () => {
     if (armouryPending) return;
@@ -586,34 +640,49 @@ function Content() {
         <>
           <PanelSectionRow>
             <InlinePicker
-              label={BACK_LEFT_LABEL}
-              options={backOptions}
-              value={buttons.back_left}
+              label={MAPPING_SET_LABEL}
+              options={SET_OPTIONS}
+              value={editSet}
               disabled={controllerDisabled}
-              onChange={(v) => run('buttons', () => setBackButton('left', v))}
+              onChange={(v) => {
+                setPickedSet(v);
+                setOpenButton(null);
+              }}
             />
           </PanelSectionRow>
+          {BUTTON_ROWS.map((b) => {
+            const entry = buttons.sets?.[editSet]?.[b.data] ?? { primary: 'factory', secondary: 'factory' };
+            return (
+              <ButtonRow
+                key={b.data}
+                button={b}
+                summary={buttonSummary(b.data, entry, buttons, labels)}
+                entry={entry}
+                open={openButton === b.data && !collapsedButtons}
+                collapsed={collapsedButtons}
+                disabled={controllerDisabled}
+                primaryOn={primaryEnabled(b.data, buttons)}
+                switchOn={toggleTarget[b.data] ?? backSwitchOn(b.data, buttons)}
+                onToggleOpen={() => setOpenButton((o) => (o === b.data ? null : b.data))}
+                onPick={(slot, action) => run('buttons', () => setButton(editSet, b.data, slot, action))}
+                onSwitch={() =>
+                  toggleSetting(
+                    b.data,
+                    backSwitchOn(b.data, buttons),
+                    (on) => setBackSecondary(b.data === 'back_left' ? 'left' : 'right', on),
+                    'buttons',
+                  )
+                }
+                onReset={() => run('buttons', () => resetButton(editSet, b.data))}
+              />
+            );
+          })}
           <PanelSectionRow>
-            <InlinePicker
-              label={BACK_RIGHT_LABEL}
-              options={backOptions}
-              value={buttons.back_right}
-              disabled={controllerDisabled}
-              onChange={(v) => run('buttons', () => setBackButton('right', v))}
-            />
-          </PanelSectionRow>
-          <Note text={comboNote} />
-          <CombosList
-            buttons={buttons}
-            collapsed={combosCollapsed(state.blocked, unavailable)}
-            disabled={controllerDisabled}
-            onChange={(button, action) => run('buttons', () => setCombo(button, action))}
-          />
-          <PanelSectionRow>
-            <ButtonItem layout="below" disabled={controllerDisabled} onClick={() => run('buttons', () => resetButtons())}>
-              {RESET_BUTTONS_LABEL}
+            <ButtonItem layout="below" disabled={controllerDisabled} onClick={() => run('buttons', () => resetAllButtons())}>
+              {RESET_ALL_LABEL}
             </ButtonItem>
           </PanelSectionRow>
+          <Note text={secondaryNote(buttons)} />
           <StatusRow status={statuses.buttons} />
         </>
       )}

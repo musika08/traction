@@ -8,14 +8,16 @@ import {
   CONTROLLER_OPTIONS,
   armouryChecked,
   ACTIONS,
-  COMBO_BUTTONS,
+  BUTTON_ROWS,
+  actionOptions,
+  actionLabels,
+  rowSummary,
+  buttonSummary,
+  secondaryNote,
+  primaryEnabled,
+  buttonsCollapsed,
+  SET_OPTIONS,
   armouryDisabled,
-  backButtonOptions,
-  changedLabel,
-  comboOptions,
-  combosNote,
-  combosCollapsed,
-  COMBOS_HELP,
   controllerBanner,
   controllerModeDescription,
   touchscreenCheck,
@@ -86,44 +88,57 @@ test('action list keeps the plan order and labels', () => {
   assert.equal(new Set(ACTIONS.map((a) => a.data)).size, ACTIONS.length);
 });
 
-test('combo buttons are the 16 non-back buttons in plan order', () => {
-  assert.equal(COMBO_BUTTONS.length, 16);
-  assert.deepEqual(COMBO_BUTTONS.slice(0, 2).map((b) => b.label), ['D-pad up', 'D-pad down']);
-  assert.deepEqual(COMBO_BUTTONS.slice(-4).map((b) => b.data), ['view', 'menu', 'lt', 'rt']);
-  assert.ok(!COMBO_BUTTONS.some((b) => b.data.startsWith('back_')));
+test('button rows follow the plan order with M1 then M2 last', () => {
+  assert.equal(BUTTON_ROWS.length, 18);
+  assert.deepEqual(BUTTON_ROWS.slice(0, 2).map((b) => b.label), ['D-pad up', 'D-pad down']);
+  assert.deepEqual(BUTTON_ROWS.slice(-4).map((b) => b.data), ['lt', 'rt', 'back_right', 'back_left']);
+  assert.deepEqual(BUTTON_ROWS.slice(-2).map((b) => b.label), ['M1 (right back button)', 'M2 (left back button)']);
+  assert.equal(new Set(BUTTON_ROWS.map((b) => b.data)).size, 18);
 });
 
-test('back button options start with Shift (combos), combo options with Unchanged', () => {
-  const back = backButtonOptions();
-  assert.equal(back.length, ACTIONS.length + 1);
-  assert.deepEqual(back[0], { data: 'shift', label: 'Shift (combos)' });
-  assert.deepEqual(back[1], { data: 'nothing', label: 'Nothing' });
-  const combo = comboOptions();
-  assert.equal(combo.length, ACTIONS.length + 1);
-  assert.deepEqual(combo[0], { data: 'unchanged', label: 'Unchanged' });
+test('mapping sets and picker options', () => {
+  assert.deepEqual(SET_OPTIONS.map((o) => o.label), ['Gamepad', 'Desktop']);
+  const o = actionOptions();
+  assert.equal(o.length, ACTIONS.length + 1);
+  assert.deepEqual(o[0], { data: 'factory', label: 'Factory' });
+  assert.deepEqual(o[1], { data: 'nothing', label: 'Nothing' });
 });
 
-test('combosNote appears only when neither back button is Shift', () => {
-  const text = 'Combos need a back button set to Shift.';
-  assert.equal(combosNote({ back_left: 'a', back_right: 'b' }), text);
-  assert.equal(combosNote({ back_left: 'shift', back_right: 'b' }), '');
-  assert.equal(combosNote({ back_left: 'a', back_right: 'shift' }), '');
-  assert.equal(combosNote({ back_left: 'shift', back_right: 'shift' }), '');
+test('rowSummary shows Primary / Secondary with Factory for factory', () => {
+  const labels = actionLabels();
+  assert.equal(rowSummary({ primary: 'factory', secondary: 'factory' }, labels), 'Factory / Factory');
+  assert.equal(rowSummary({ primary: 'a', secondary: 'screenshot' }, labels), 'A / Screenshot');
+  assert.equal(rowSummary({ primary: 'b', secondary: 'factory' }, labels, true), 'B');
+  assert.equal(rowSummary(undefined, labels), 'Factory / Factory');
 });
 
-test('changedLabel', () => {
-  assert.equal(changedLabel(0), 'None changed');
-  assert.equal(changedLabel(3), '3 changed');
-  assert.equal(changedLabel(undefined), 'None changed');
+test('buttonSummary: back buttons show the switch while on, else the Primary only', () => {
+  const labels = actionLabels();
+  const st = { m1_secondary: true, m2_secondary: false };
+  const e = { primary: 'b', secondary: 'factory' };
+  assert.equal(buttonSummary('back_right', e, st, labels), 'Use as secondary function');
+  assert.equal(buttonSummary('back_left', e, st, labels), 'B');
+  assert.equal(buttonSummary('a', e, st, labels), 'B / Factory');
 });
 
-test('the combo list collapses only when blocked or unavailable, not while working', () => {
-  assert.equal(combosCollapsed('', ''), false);
-  assert.equal(combosCollapsed(undefined, undefined), false);
-  assert.equal(combosCollapsed('Update Overdrive', ''), true);
-  assert.equal(combosCollapsed('', 'helper not running'), true);
+test('primaryEnabled is false only for a back button whose switch is on', () => {
+  const st = { m1_secondary: true, m2_secondary: false };
+  assert.equal(primaryEnabled('back_right', st), false);
+  assert.equal(primaryEnabled('back_left', st), true);
+  assert.equal(primaryEnabled('a', st), true);
 });
 
-test('combos help line', () => {
-  assert.equal(COMBOS_HELP, 'Changing one combo puts the others of the same button pair back to their factory action.');
+test('secondaryNote appears only when both switches are off', () => {
+  const text = 'Secondary functions need a back button set to Use as secondary function.';
+  assert.equal(secondaryNote({ m1_secondary: false, m2_secondary: false }), text);
+  assert.equal(secondaryNote({ m1_secondary: true, m2_secondary: false }), '');
+  assert.equal(secondaryNote({ m1_secondary: false, m2_secondary: true }), '');
+  assert.equal(secondaryNote(undefined), '');
+});
+
+test('the button list collapses only when blocked or unavailable, not while working', () => {
+  assert.equal(buttonsCollapsed('', ''), false);
+  assert.equal(buttonsCollapsed(undefined, undefined), false);
+  assert.equal(buttonsCollapsed('Update Overdrive', ''), true);
+  assert.equal(buttonsCollapsed('', 'helper not running'), true);
 });
