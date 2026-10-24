@@ -17,6 +17,7 @@ import {
   ARMOURY_LABEL,
   BACK_LEFT_LABEL,
   BACK_RIGHT_LABEL,
+  COMBOS_HELP,
   COMBOS_LABEL,
   COMBO_BUTTONS,
   CONTROLLER_NOT_FOUND,
@@ -34,6 +35,7 @@ import {
   backButtonOptions,
   changedLabel,
   comboOptions,
+  combosCollapsed,
   combosNote,
   controllerBanner,
   controllerModeDescription,
@@ -219,27 +221,30 @@ function InlinePicker<T>(props: {
 }
 
 // "Combos  3 changed ▾": expands one inline picker per button (Unchanged, then the actions) inside the panel.
+// `collapsed` (blocked, helper unavailable) closes the list and its row; `disabled` (a change being written, an
+// Armoury switch) only disables the pickers, so the list stays open while a combo is written.
 function CombosList(props: {
   buttons: ButtonsState;
+  collapsed: boolean;
   disabled: boolean;
   onChange: (button: string, action: string) => void;
 }) {
-  const { buttons, disabled, onChange } = props;
+  const { buttons, collapsed, disabled, onChange } = props;
   const [open, setOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
   const wasOpen = useRef(false);
   const options = comboOptions();
 
   useEffect(() => {
-    if (disabled && open) setOpen(false);
-  }, [disabled, open]);
+    if (collapsed && open) setOpen(false);
+  }, [collapsed, open]);
 
   useEffect(() => {
     if (!open && wasOpen.current) rowRef.current?.focus();
     wasOpen.current = open;
   }, [open]);
 
-  const toggle = () => setOpen((o) => pressRow(o, disabled));
+  const toggle = () => setOpen((o) => pressRow(o, collapsed));
   const cancel = (evt: CustomEvent) => {
     const r = pressCancel(open);
     if (!r.handled) return;
@@ -263,7 +268,7 @@ function CombosList(props: {
             padding: '8px 10px',
             borderRadius: '2px',
             background: 'rgba(255, 255, 255, 0.06)',
-            color: disabled ? '#8b929a' : '#dcdedf',
+            color: collapsed ? '#8b929a' : '#dcdedf',
             fontSize: '14px',
           }}
           onActivate={toggle}
@@ -272,11 +277,12 @@ function CombosList(props: {
           onOKActionDescription={open ? 'Close' : 'Open'}
         >
           <span style={{ whiteSpace: 'nowrap' }}>{COMBOS_LABEL}</span>
-          <span style={{ color: disabled ? '#8b929a' : '#ffffff', whiteSpace: 'nowrap' }}>
+          <span style={{ color: collapsed ? '#8b929a' : '#ffffff', whiteSpace: 'nowrap' }}>
             {changedLabel(buttons.changed) + (open ? ' ▴' : ' ▾')}
           </span>
         </Focusable>
       </PanelSectionRow>
+      <Note text={COMBOS_HELP} />
       {open &&
         COMBO_BUTTONS.map((b) => (
           <PanelSectionRow key={b.data}>
@@ -284,7 +290,7 @@ function CombosList(props: {
               label={b.label}
               options={options}
               value={buttons.combos?.[b.data] ?? 'unchanged'}
-              disabled={disabled}
+              disabled={disabled || collapsed}
               unknownText="Unchanged"
               onChange={(v) => onChange(b.data, v)}
             />
@@ -599,6 +605,7 @@ function Content() {
           <Note text={comboNote} />
           <CombosList
             buttons={buttons}
+            collapsed={combosCollapsed(state.blocked, unavailable)}
             disabled={controllerDisabled}
             onChange={(button, action) => run('buttons', () => setCombo(button, action))}
           />

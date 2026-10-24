@@ -30,7 +30,7 @@ Buttons (ids, labels, zone, side 0 = first / 1 = second): `du` D-pad up 1/0, `dd
 
 - Ruling: the combo list is a collapsible section inside the panel using the panel's existing inline picker (`src/picker.ts`), not a Decky modal: the panel already avoids Decky's DropdownItem because it opens a separate popup window (comment in `src/index.tsx`), and a modal would be the same kind of extra window. Cost if wrong: move the list into a modal later.
 - Ruling: the action/defaults tables live in Python (`bindings.py`); the helper only holds the allow-list of codes and the gamepad defaults it needs for the emergency reset. A test checks the C# allow-list equals the Python action codes. Cost if wrong: one more table to keep in step.
-- Ruling: settings key `bindings = {"back_left": <action id | "shift">, "back_right": <...>, "combos": {<button id>: <action id>}}`; missing keys mean factory. A back button set to an action also gets that action in its own combo slot (as G-Helper's defaults duplicate M1/M2).
+- Ruling: settings key `bindings = {"back_left": <action id | "shift">, "back_right": <...>, "combos": {<button id>: <action id>}}`; missing keys mean factory. A back button set to an action gets it in its button slot only; its combo slot keeps the factory Shift code (final review I1: `{"back_right": "b"}` zone 8 = `02-8E, 02-8E, 01-02, 02-8F`, bytes `02 00 8E | 02 00 8E | 01 02 | 02 00 8F`, the report proven on the device).
 
 ## Review Focus
 

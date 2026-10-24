@@ -62,6 +62,13 @@ export const BACK_RIGHT_LABEL = 'Right back button';
 export const COMBOS_LABEL = 'Combos';
 export const RESET_BUTTONS_LABEL = 'Reset buttons';
 export const COMBOS_NEED_SHIFT = 'Combos need a back button set to Shift.';
+export const COMBOS_HELP = 'Changing one combo puts the others of the same button pair back to their factory action.';
+
+// The combo list closes only when the rows cannot be used at all (blocked by an old Overdrive, helper unavailable);
+// while a change is being written it stays open and only its pickers are disabled.
+export function combosCollapsed(blocked: string | undefined, unavailable: string | undefined): boolean {
+  return !!blocked || !!unavailable;
+}
 
 export type ButtonsState = {
   back_left: string;

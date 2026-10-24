@@ -14,6 +14,8 @@ import {
   changedLabel,
   comboOptions,
   combosNote,
+  combosCollapsed,
+  COMBOS_HELP,
   controllerBanner,
   controllerModeDescription,
   touchscreenCheck,
@@ -113,4 +115,15 @@ test('changedLabel', () => {
   assert.equal(changedLabel(0), 'None changed');
   assert.equal(changedLabel(3), '3 changed');
   assert.equal(changedLabel(undefined), 'None changed');
+});
+
+test('the combo list collapses only when blocked or unavailable, not while working', () => {
+  assert.equal(combosCollapsed('', ''), false);
+  assert.equal(combosCollapsed(undefined, undefined), false);
+  assert.equal(combosCollapsed('Update Overdrive', ''), true);
+  assert.equal(combosCollapsed('', 'helper not running'), true);
+});
+
+test('combos help line', () => {
+  assert.equal(COMBOS_HELP, 'Changing one combo puts the others of the same button pair back to their factory action.');
 });

@@ -51,12 +51,18 @@ listens for them itself.
   then writes all four slots of that zone: changed slots from the owner's choices, untouched slots from G-Helper's
   defaults. "Unchanged" combos in a written zone therefore become G-Helper's default for that combo (stated in the
   panel's help text). Reset writes all 9 zones with G-Helper's defaults.
-- Back button as Shift = the factory codes `02-8E` (left) / `02-8F` (right) in its slot and its combo slot.
+- Back button as Shift = the factory codes `02-8E` (left) / `02-8F` (right) in its slot and its combo slot. A back
+  button set to an action gets it in its slot only; its combo slot keeps the factory Shift code (right back button as
+  B: zone 8 = `02-8E, 02-8E, 01-02, 02-8F`, the report proven on the device).
 - New helper command `set_bindings {zone, slots[4]}`; slot values validated against the action list (section 3)
   only, so the helper can never send an arbitrary report.
 - Safety: after every write the helper checks that Windows still sees the gamepad (XInput pad present). If it is gone
   for 5 s, the helper writes G-Helper's full default set (start-up sequence, Gamepad mode, all 9 zones) and the
   panel shows "The controller stopped responding, so buttons were reset to the factory set."
+  (Final review: every XInput pad 0-3 seen before the write must be seen again at 4 polls in a row, about 2 s; the
+  reset looks for the controller up to 3 times, 1 s apart. Desktop-mode writes pass `watch: false`: no check, no
+  polling, no reset, since Desktop mode hides the pad. After a reset the next reapply tick writes the stored mode
+  and vibration again.)
 
 ## 5. When it is applied
 
@@ -66,6 +72,8 @@ listens for them itself.
 - Gamepad mode only. Switching to Desktop mode writes G-Helper's desktop defaults for the zones Traction changed
   (desktop uses keyboard and mouse codes there); switching back to Gamepad writes the owner's set again.
   Auto mode follows the same rule on each switch.
+  A change made while Desktop is on the pad is stored and its zones marked touched, not written (the Desktop slots
+  do not depend on it); the next Gamepad write puts them right.
 - Not written while an old Overdrive is installed (same block as the other controller rows).
 
 ## 6. Tests
