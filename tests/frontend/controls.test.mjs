@@ -22,6 +22,7 @@ import {
   controllerBanner,
   controllerModeDescription,
   touchscreenCheck,
+  keepPickedSet,
 } from '../../src/controls.ts';
 import { rowValue, pressRow, choose, pressCancel, focusIndex } from '../../src/picker.ts';
 
@@ -103,6 +104,12 @@ test('mapping sets and picker options', () => {
   assert.equal(o.length, ACTIONS.length + 1);
   assert.deepEqual(o[0], { data: 'factory', label: 'Factory' });
   assert.deepEqual(o[1], { data: 'nothing', label: 'Nothing' });
+  // M1/M2: factory is the switch (Shift key), so their Primary picker has no Factory: Nothing, then the actions
+  const back = actionOptions(true);
+  assert.equal(back.length, ACTIONS.length);
+  assert.deepEqual(back[0], { data: 'nothing', label: 'Nothing' });
+  assert.equal(back.some((x) => x.data === 'factory'), false);
+  assert.deepEqual(actionOptions(false), o);
 });
 
 test('rowSummary shows Primary / Secondary with Factory for factory', () => {
@@ -120,6 +127,12 @@ test('buttonSummary: back buttons show the switch while on, else the Primary onl
   assert.equal(buttonSummary('back_right', e, st, labels), 'Use as secondary function');
   assert.equal(buttonSummary('back_left', e, st, labels), 'B');
   assert.equal(buttonSummary('a', e, st, labels), 'B / Factory');
+  // switch off with no Primary: the button does nothing (00-00), never "Factory"
+  const none = { primary: 'factory', secondary: 'factory' };
+  assert.equal(buttonSummary('back_left', none, st, labels), 'Nothing');
+  assert.equal(buttonSummary('back_left', undefined, st, labels), 'Nothing');
+  assert.equal(buttonSummary('back_left', { primary: 'nothing', secondary: 'factory' }, st, labels), 'Nothing');
+  assert.equal(buttonSummary('back_right', none, st, labels), 'Use as secondary function');
 });
 
 test('primaryEnabled is false only for a back button whose switch is on', () => {
@@ -127,6 +140,18 @@ test('primaryEnabled is false only for a back button whose switch is on', () => 
   assert.equal(primaryEnabled('back_right', st), false);
   assert.equal(primaryEnabled('back_left', st), true);
   assert.equal(primaryEnabled('a', st), true);
+  // while a switch change runs, the picker follows the toggle's target
+  assert.equal(primaryEnabled('back_right', st, false), true);
+  assert.equal(primaryEnabled('back_left', st, true), false);
+  assert.equal(primaryEnabled('back_left', st, undefined), true);
+  assert.equal(primaryEnabled('a', st, true), true);
+});
+
+test('keepPickedSet fixes the edited set from the first loaded live set', () => {
+  assert.equal(keepPickedSet(null, 'desktop'), 'desktop');
+  assert.equal(keepPickedSet(null, undefined), null);
+  assert.equal(keepPickedSet('desktop', 'gamepad'), 'desktop');   // Auto flipping the pad does not move it
+  assert.equal(keepPickedSet('gamepad', 'desktop'), 'gamepad');
 });
 
 test('secondaryNote appears only when both switches are off', () => {

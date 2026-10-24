@@ -77,7 +77,7 @@ class Settings:
         out = {k: getattr(self, k) for k in FIELDS}
         b = binding_model.clean(self.bindings)
         stored = {name: {bid: dict(e) for bid, e in b[name].items()} for name in binding_model.SETS if b[name]}
-        stored.update({sw: False for sw in ("m1_secondary", "m2_secondary") if not b[sw]})
+        stored.update({sw: False for sw in sorted(binding_model.SWITCHES.values()) if not b[sw]})
         if stored:
             out["bindings"] = stored
         if self.touched_zones:

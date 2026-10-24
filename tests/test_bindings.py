@@ -188,3 +188,46 @@ def test_zone_slots_unknown_set_raises():
 
 def test_no_v1_shims():
     assert not hasattr(bindings, "changed_zones")
+
+
+def test_switches_constant():
+    assert bindings.SWITCHES == {"back_left": "m2_secondary", "back_right": "m1_secondary"}
+
+
+def test_reset_button_on_a_back_button_turns_its_switch_back_on():
+    # Final review 1: factory for M1/M2 is the Shift key, so Reset clears that set's Primary and the shared switch.
+    b = bindings.set_back_secondary({}, "back_right", False)
+    b = bindings.set_back_secondary(b, "back_left", False)
+    b = bindings.set_choice(b, "gamepad", "back_right", "primary", "b")
+    b = bindings.set_choice(b, "desktop", "back_right", "primary", "a")
+    out = bindings.reset_button(b, "gamepad", "back_right")
+    assert out["m1_secondary"] is True and out["m2_secondary"] is False   # only that button's switch
+    assert "back_right" not in out["gamepad"]
+    assert out["desktop"]["back_right"] == {"primary": "a"}                # the other set's Primary is kept
+    assert bindings.zone_slots(8, out, "gamepad") == ["00-00", "02-8E", "02-8F", "02-8F"]
+    out = bindings.reset_button(b, "desktop", "back_left")
+    assert out["m2_secondary"] is True and out["m1_secondary"] is False
+
+
+def test_zones_with_choices_ignores_a_primary_under_an_on_switch():
+    # Final review 3: a stored Primary while the switch is on does nothing, so zone 8 is not kept in every write.
+    b = bindings.set_choice({}, "gamepad", "back_right", "primary", "b")
+    b = bindings.set_choice(b, "desktop", "back_left", "primary", "a")
+    assert bindings.zones_with_choices(b) == []
+    assert bindings.zones_with_choices(bindings.set_back_secondary(b, "back_right", False)) == [8]
+
+
+def test_v1_back_button_nothing():
+    # Final review 5: v1 "nothing" on M1 keeps M1 dead: switch off, Primary Nothing (00-00) in both sets.
+    b = bindings.clean({"back_right": "nothing"})
+    assert b["m1_secondary"] is False and b["m2_secondary"] is True
+    assert b["gamepad"] == {"back_right": {"primary": "nothing"}}
+    assert b["desktop"] == {"back_right": {"primary": "nothing"}}
+    for name in bindings.SETS:
+        assert bindings.zone_slots(8, b, name) == ["02-8E", "02-8E", "00-00", "02-8F"]
+
+
+def test_set_back_secondary_bad_side():
+    for bad in ("left", "right", "m1", "a", "back", ""):
+        assert bindings.set_back_secondary({}, bad, False) == V2_FACTORY
+    assert bindings.set_back_secondary({}, "back_left", "off") == V2_FACTORY

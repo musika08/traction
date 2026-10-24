@@ -42,6 +42,7 @@ import {
   isBackButton,
   nextOpen,
   primaryEnabled,
+  keepPickedSet,
   secondaryNote,
   touchscreenCheck,
 } from './controls';
@@ -246,8 +247,8 @@ function ButtonRow(props: {
   const { button, summary, entry, open, collapsed, disabled, primaryOn, switchOn } = props;
   const rowRef = useRef<HTMLDivElement>(null);
   const wasOpen = useRef(false);
-  const options = actionOptions();
   const back = isBackButton(button.data);
+  const options = actionOptions(back);
 
   useEffect(() => {
     if (!open && wasOpen.current) rowRef.current?.focus();
@@ -317,9 +318,10 @@ function ButtonRow(props: {
             <InlinePicker
               label="Primary"
               options={options}
-              value={entry.primary}
+              // M1/M2 with no Primary do nothing (00-00): shown as Nothing, the option it equals
+              value={back && entry.primary === 'factory' ? 'nothing' : entry.primary}
               disabled={disabled || collapsed || !primaryOn}
-              unknownText="Factory"
+              unknownText={back ? 'Nothing' : 'Factory'}
               onChange={(v) => props.onPick('primary', v)}
             />
           </PanelSectionRow>
@@ -355,7 +357,8 @@ function Content() {
   // The target while a toggle's call runs, so a failed change falls back to the stored value.
   const [toggleTarget, setToggleTarget] = useState<Record<string, boolean | undefined>>({});
   const [armouryBusy, setArmouryBusy] = useState(armouryPending !== null);
-  // The mapping set being edited (null: the one on the pad now) and the button row that is expanded.
+  // The mapping set being edited (null until the first state names the live set; then fixed, so Auto changing the
+  // mode on the pad does not move it while editing) and the button row that is expanded.
   const [pickedSet, setPickedSet] = useState<string | null>(null);
   const [openButton, setOpenButton] = useState<string | null>(null);
   const mounted = useRef(true);
@@ -371,6 +374,7 @@ function Content() {
       const st = await getState();
       if (!mounted.current) return '';
       setState(st);
+      setPickedSet((p) => keepPickedSet(p, st.buttons?.live));
       setStartError('');
       return '';
     } catch (e) {
@@ -663,7 +667,7 @@ function Content() {
                 open={openButton === b.data && !collapsedButtons}
                 collapsed={collapsedButtons}
                 disabled={controllerDisabled}
-                primaryOn={primaryEnabled(b.data, buttons)}
+                primaryOn={primaryEnabled(b.data, buttons, toggleTarget[b.data])}
                 switchOn={toggleTarget[b.data] ?? backSwitchOn(b.data, buttons)}
                 onToggleOpen={() => setOpenButton((o) => nextOpen(o, b.data, collapsedButtons))}
                 onPick={(slot, action) => run('buttons', () => setButton(editSet, b.data, slot, action))}

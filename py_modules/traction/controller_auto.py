@@ -71,6 +71,14 @@ class ControllerAuto:
         return self._written
 
     @property
+    def desktop_settled(self) -> bool:
+        """True when Desktop is on the pad now: this loop wrote it and has seen the latest reapply, and no reapply is
+        running (a reapply writes the stored mode, Gamepad under Auto, so until the loop writes Desktop again the pad
+        holds Gamepad)."""
+        rp = self.reapplier
+        return self._written == DESKTOP and self._applies_seen == rp.applies and not rp.applying
+
+    @property
     def running(self) -> bool:
         """True from start() until stop()."""
         return self._on

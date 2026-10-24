@@ -33,6 +33,9 @@ MOVE_FAILED = ("Overdrive's Armoury Crate record could not be moved to the share
                "moment.")
 OVERDRIVE_POLL = 5.0             # seconds between checks of an old Overdrive's version
 MOVE_WAIT = 2.0                  # how long a move of Overdrive's orphaned record waits for the record lock
+# The reply to an edit of the set whose mode is not on the pad (stored only).
+SAVED_FOR = {"gamepad": "Saved. It applies when the controller is in Gamepad mode.",
+             "desktop": "Saved. It applies when the controller is in Desktop mode."}
 ACTION_IDS = frozenset(a[0] for a in bindings.ACTIONS)
 BUTTON_ZONES = {b[0]: b[2] for b in bindings.BUTTONS}
 BACK_ZONE = 8
@@ -389,25 +392,26 @@ class Plugin:
     # ---------- buttons ----------
 
     def _live_mode(self, s=None) -> str:
-        """The mode on the pad now: the stored one, or under Auto the one the loop last wrote (Gamepad until it
-        has written Desktop)."""
+        """The mode on the pad now: the stored one, or under Auto Desktop only when the loop wrote it after the latest
+        reapply and no reapply runs (a reapply writes Gamepad under Auto), else Gamepad."""
         mode = (s or self.settings).controller_mode
         if mode == "auto":
             ca = self.controller_auto
-            return "desktop" if ca is not None and ca.written_mode == "desktop" else "gamepad"
+            return "desktop" if ca is not None and ca.desktop_settled else "gamepad"
         return mode
 
     async def _change_buttons(self, change, zones, set_name=None) -> dict:
-        """Under the reapplier's lock: builds the new bindings with `change(current)` from the bindings stored at
-        that moment (a setter waiting for the lock never stores a stale set). A change to the set of the mode that is
-        not on the pad (`set_name` other than the live set) is only stored: the next write of that mode puts it on the
-        pad (controls.apply_bindings writes the zones with a choice in either set). Otherwise (`set_name` None: the
-        back switches and Reset all, which act on the live set) `zones` are written for the live mode, watched in
-        Gamepad, unwatched in Desktop (the pad is hidden there), then stored. Not stored when the write was refused
-        (the pad not seen included: nothing was written); when only some zones landed (Reset all buttons), only those
-        zones' new choices are stored and the next reapply tick writes the zones again. When the pad went away after
-        the write, the helper reset it to the factory set: both sets are cleared, both switches go back on, the
-        touched zones are cleared, and the next tick writes the mode and vibration again."""
+        """Under the reapplier's lock: builds the new bindings with `change(current)` from the bindings stored at that
+        moment (a setter waiting for the lock never stores a stale set). A change to the set of the mode that is not on
+        the pad (`set_name` other than the live set) is only stored, and the reply says in which mode it applies: the
+        next write of that mode puts it on the pad (controls.apply_bindings writes the zones with a choice in either
+        set). Otherwise (`set_name` None: the back switches, Reset of M1/M2 and Reset all, which act on the live set)
+        `zones` are written for the live mode, watched in Gamepad, unwatched in Desktop (the pad is hidden there), then
+        stored. Not stored when the write was refused (the pad not seen included: nothing was written); when only some
+        zones landed (Reset all buttons), only those zones' new choices are stored and the next reapply tick writes the
+        zones again. When the pad went away after the write, the helper reset it to the factory set: both sets are
+        cleared, both switches go back on, the touched zones are cleared, and the next tick writes the mode and
+        vibration again."""
         s = self.settings
         async with self.reapplier.user_change():
             if self._busy():   # an Armoury switch may have begun while this waited for the lock
@@ -417,7 +421,7 @@ class Plugin:
             note = ""
             mode = self._live_mode()
             if set_name is not None and set_name != _set_of(mode):
-                pass   # the other set: stored only, written when its mode is
+                note = SAVED_FOR[set_name]   # the other set: stored only, written when its mode is
             elif await self._controller_found():
                 r = await controls.write_zones(self.client, new, mode, zones, decky.logger, watch=mode != "desktop")
                 if r.get("reset"):
@@ -439,7 +443,10 @@ class Plugin:
                 note = NO_CONTROLLER
             s.bindings = new
             s.user_set = True   # reapplied with the controller mode after sleep
-            return {"ok": True, "message": " ".join(m for m in (note, self._save()) if m)}
+            failed = self._save()
+            if failed and note in SAVED_FOR.values():
+                note = ""   # not "Saved." when the save failed: the failure alone is shown
+            return {"ok": True, "message": " ".join(m for m in (note, failed) if m)}
 
     @staticmethod
     def _check_button(set_name, button):
@@ -479,12 +486,14 @@ class Plugin:
                                           [BACK_ZONE])
 
     async def reset_button(self, set_name, button) -> dict:
-        """One button's Primary and Secondary in that set back to factory (live set: its zone is written)."""
+        """One button's Primary and Secondary in that set back to factory (live set: its zone is written). M1 and M2:
+        that set's Primary is cleared and the shared switch turned back on (factory is the Shift key), so zone 8 is
+        written for the live mode whatever set is edited."""
         refused = self._refuse_controller() or self._check_button(set_name, button)
         if refused:
             return refused
         return await self._change_buttons(lambda b: bindings.reset_button(b, set_name, button),
-                                          [BUTTON_ZONES[button]], set_name)
+                                          [BUTTON_ZONES[button]], None if button in bindings.BACK else set_name)
 
     async def reset_all_buttons(self) -> dict:
         """Clears both sets and turns both back switches on, writing all 9 zones with the live set's factory slots

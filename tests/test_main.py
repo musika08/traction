@@ -1025,6 +1025,8 @@ Z5_DESKTOP = ["02-5A", "00-00", "02-76", "00-00"]
 Z8_FACTORY = ["02-8E", "02-8E", "02-8F", "02-8F"]
 Z8_M1_AS_B = ["02-8E", "02-8E", "01-02", "02-8F"]          # I1: the proven report
 Z8_M1_OFF = ["02-8E", "02-8E", "00-00", "02-8F"]           # Review Focus 2: M1 does nothing, not Shift
+SAVED_DESKTOP = "Saved. It applies when the controller is in Desktop mode."
+SAVED_GAMEPAD = "Saved. It applies when the controller is in Gamepad mode."
 Z1_GAMEPAD = ["01-09", "05-19", "01-0A", "04-02-82-23"]
 # M2 as A in both sets (its switch off), as a v1 file with back_left "a" loads
 M2_AS_A = {"gamepad": {"back_left": {"primary": "a"}}, "desktop": {"back_left": {"primary": "a"}},
@@ -1141,17 +1143,19 @@ def test_other_set_is_only_stored_until_its_mode_is_written(tmp_path):
     async def go():
         p, c, s = plugin_with(tmp_path)
         controller_found(c)
-        assert (await wait(p.set_button("desktop", "a", "primary", "esc"))) == {"ok": True, "message": ""}
+        assert (await wait(p.set_button("desktop", "a", "primary", "esc"))) == {"ok": True, "message": SAVED_DESKTOP}
         assert c.calls == []                                            # not even a controller check
         assert s.touched_zones == set() and s.user_set is True
         assert Settings.load(s.path).bindings["desktop"] == {"a": {"primary": "esc"}}
-        assert (await wait(p.reset_button("desktop", "b")))["ok"] and c.calls == []
+        assert (await wait(p.reset_button("desktop", "b"))) == {"ok": True, "message": SAVED_DESKTOP}
+        assert c.calls == []
         assert (await wait(p.set_controller_mode("desktop")))["ok"]
         assert binding_writes(c) == [(5, ["02-76", "00-00", "02-76", "00-00"])]
         assert [a.get("watch") for a in binding_args(c)] == [False]     # Desktop writes are not watched
         c.calls.clear()
-        assert (await wait(p.set_button("gamepad", "x", "secondary", "tab")))["ok"]   # now Gamepad is the other set
-        assert c.calls == []
+        assert (await wait(p.set_button("gamepad", "x", "secondary", "tab"))) == {"ok": True,
+                                                                                 "message": SAVED_GAMEPAD}
+        assert c.calls == []                                            # now Gamepad is the other set
         assert (await wait(p.set_controller_mode("gamepad")))["ok"]     # both sets' zones, Gamepad slots
         assert binding_writes(c) == [(5, Z5_FACTORY), (6, ["01-03", "02-0D", "01-04", "04-04-8C-88-8A-44"])]
     run(go())
@@ -1275,7 +1279,8 @@ def test_buttons_saved_when_controller_missing(tmp_path):
                                                                                      "message": NO_CONTROLLER}
         assert (await wait(p.set_button("gamepad", "y", "secondary", "tab"))) == {"ok": True,
                                                                                  "message": NO_CONTROLLER}
-        assert (await wait(p.set_button("desktop", "y", "primary", "esc"))) == {"ok": True, "message": ""}
+        assert (await wait(p.set_button("desktop", "y", "primary", "esc"))) == {"ok": True,
+                                                                               "message": SAVED_DESKTOP}
         assert binding_writes(c) == []
         saved = Settings.load(s.path)
         assert saved.bindings == with_choices(("gamepad", "back_left", "primary", "a"),
@@ -1610,4 +1615,51 @@ def test_get_state_does_not_read_while_a_binding_write_runs(tmp_path):
         c.calls.clear()
         await wait(p.get_state())
         assert any(x[0] == "controller_info" for x in c.calls)       # read again once the write is done
+    run(go())
+
+
+def test_auto_after_a_reapply_edits_go_to_the_gamepad_set(tmp_path):
+    # Final review 2: Auto's loop wrote Desktop, then a reapply (it writes Gamepad under Auto) ran: until the loop
+    # writes Desktop again, Gamepad is on the pad.
+    async def go():
+        p, c, s = plugin_with(tmp_path, controller_mode="auto")
+        controller_found(c)
+        p.controller_auto._written = "desktop"
+        assert (await wait(p.get_state()))["buttons"]["live"] == "desktop"
+        p.reapplier.applies += 1
+        assert (await wait(p.get_state()))["buttons"]["live"] == "gamepad"
+        c.calls.clear()
+        assert (await wait(p.set_button("desktop", "a", "primary", "esc"))) == {"ok": True, "message": SAVED_DESKTOP}
+        assert binding_writes(c) == []                                  # stored only
+        assert s.bindings["desktop"] == {"a": {"primary": "esc"}}
+        assert (await wait(p.set_button("gamepad", "a", "secondary", "win"))) == {"ok": True, "message": ""}
+        assert binding_writes(c) == [(5, ["01-01", "02-82", "01-02", "00-00"])]
+        assert set(binding_args(c)[0]) == {"zone", "slots"}            # watched: Gamepad
+        p.reapplier.applies -= 1
+        p.reapplier.applying = 1                                       # a reapply running: Gamepad as well
+        assert (await wait(p.get_state()))["buttons"]["live"] == "gamepad"
+        p.reapplier.applying = 0
+    run(go())
+
+
+def test_reset_button_on_a_back_button_turns_the_switch_on_and_writes_zone_8(tmp_path):
+    # Final review 1/5: factory for M1 is the Shift key; zone 8 is live whatever set is edited (the switch is shared).
+    chosen = with_choices(("gamepad", "back_right", "primary", "b"), ("desktop", "back_right", "primary", "a"),
+                          m1_secondary=False)
+    async def go():
+        p, c, s = plugin_with(tmp_path, bindings=chosen, touched_zones={8})
+        controller_found(c)
+        assert (await wait(p.reset_button("desktop", "back_right"))) == {"ok": True, "message": ""}
+        assert binding_writes(c) == [(8, Z8_FACTORY)]                   # the Gamepad set is live: written, watched
+        assert set(binding_args(c)[0]) == {"zone", "slots"}
+        saved = Settings.load(s.path)
+        assert saved.bindings == with_choices(("gamepad", "back_right", "primary", "b"))
+        assert saved.bindings["m1_secondary"] is True
+        assert s.touched_zones == set()                                 # zone 8 holds the factory set again
+        c.calls.clear()
+        s.controller_mode = "desktop"
+        s.bindings = chosen
+        assert (await wait(p.reset_button("gamepad", "back_right")))["ok"]
+        assert binding_writes(c) == [(8, Z8_FACTORY)] and binding_args(c)[0]["watch"] is False
+        assert s.bindings == with_choices(("desktop", "back_right", "primary", "a"))
     run(go())

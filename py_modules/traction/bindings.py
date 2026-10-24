@@ -59,7 +59,8 @@ SHIFT = {"back_left": "02-8E", "back_right": "02-8F"}
 BACK = tuple(SHIFT)
 SETS = ("gamepad", "desktop")
 FACTORY = "factory"
-_SWITCH = {"back_left": "m2_secondary", "back_right": "m1_secondary"}
+# The "use as secondary function" switch of each back button (shared by both sets).
+SWITCHES = {"back_left": "m2_secondary", "back_right": "m1_secondary"}
 _SLOTS = ("primary", "secondary")
 _CODE = {a[0]: a[2] for a in ACTIONS}
 _BUTTON = {b[0]: b for b in BUTTONS}
@@ -93,7 +94,7 @@ def clean(raw) -> dict:
     out = _blank()
     if not isinstance(raw, dict):
         return out
-    if any(k in raw for k in SETS) or any(k in raw for k in _SWITCH.values()):
+    if any(k in raw for k in SETS) or any(k in raw for k in SWITCHES.values()):
         for name in SETS:
             sec = raw.get(name)
             if not isinstance(sec, dict):
@@ -108,7 +109,7 @@ def clean(raw) -> dict:
                         kept[slot] = v
                 if kept:
                     out[name][bid] = kept
-        for sw in _SWITCH.values():
+        for sw in SWITCHES.values():
             if isinstance(raw.get(sw), bool):
                 out[sw] = raw[sw]
         return out
@@ -117,7 +118,7 @@ def clean(raw) -> dict:
         if isinstance(v, str) and v != "shift" and v in _CODE:
             for name in SETS:
                 out[name][k] = {"primary": v}
-            out[_SWITCH[k]] = False
+            out[SWITCHES[k]] = False
     combos = raw.get("combos")
     if isinstance(combos, dict):
         for k, v in combos.items():
@@ -135,7 +136,7 @@ def _slots(bid: str, b: dict, set_name: str) -> list:
     base, combo = _GAMEPAD[bid]
     entry = b[set_name].get(bid, {})
     if bid in BACK:
-        if b[_SWITCH[bid]]:
+        if b[SWITCHES[bid]]:
             return [SHIFT[bid], SHIFT[bid]]
         p = entry.get("primary")
         return [_CODE[p] if p is not None else NONE, SHIFT[bid]]
@@ -150,18 +151,18 @@ def zone_slots(zone: int, bindings: dict, set_name: str) -> list:
     if not _is_id(set_name, SETS):
         raise ValueError(f"unknown mapping set: {set_name!r}")
     b = clean(bindings)
-    name = set_name
     out: list = []
     for bid, _label, _z, _side in sorted((x for x in BUTTONS if x[2] == zone), key=lambda x: x[3]):
-        out += _slots(bid, b, name)
+        out += _slots(bid, b, set_name)
     return out
 
 
 def zones_with_choices(bindings: dict) -> list:
-    """Sorted zones where the owner chose something in either set, or a back button's switch is off."""
+    """Sorted zones where the owner chose something in either set, or a back button's switch is off. A back button's
+    stored Primary counts only while its switch is off (under an on switch the zone holds the factory Shift codes)."""
     b = clean(bindings)
-    zones = {_BUTTON[bid][2] for name in SETS for bid in b[name]}
-    for k, sw in _SWITCH.items():
+    zones = {_BUTTON[bid][2] for name in SETS for bid in b[name] if bid not in BACK}
+    for k, sw in SWITCHES.items():
         if not b[sw]:
             zones.add(_BUTTON[k][2])
     return sorted(zones)
@@ -189,16 +190,19 @@ def set_choice(bindings: dict, set_name: str, button: str, slot: str, action) ->
 def set_back_secondary(bindings: dict, side: str, on: bool) -> dict:
     """A new cleaned dict with the "use as secondary function" switch of back_left (M2) / back_right (M1) set."""
     b = clean(bindings)
-    if _is_id(side, _SWITCH) and isinstance(on, bool):
-        b[_SWITCH[side]] = on
+    if _is_id(side, SWITCHES) and isinstance(on, bool):
+        b[SWITCHES[side]] = on
     return b
 
 
 def reset_button(bindings: dict, set_name: str, button: str) -> dict:
-    """A new cleaned dict with the button's Primary and Secondary in that set back to factory."""
+    """A new cleaned dict with the button's Primary and Secondary in that set back to factory. A back button's factory
+    binding is the Shift key: its Primary in that set is cleared and its (shared) switch turned back on."""
     b = clean(bindings)
     if _is_id(set_name, SETS) and _is_id(button, _BUTTON):
         b[set_name].pop(button, None)
+        if button in BACK:
+            b[SWITCHES[button]] = True
     return b
 
 
@@ -218,6 +222,6 @@ def keep_zones(old: dict, new: dict, zones) -> dict:
         for name in SETS:
             if bid in src[name]:
                 out[name][bid] = dict(src[name][bid])
-    for bid, sw in _SWITCH.items():
+    for bid, sw in SWITCHES.items():
         out[sw] = (n if _BUTTON[bid][2] in zones else o)[sw]
     return out

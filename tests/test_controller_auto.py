@@ -573,3 +573,26 @@ def test_stop_writes_the_bindings_only_after_desktop(tmp_path):
         await ca.stop(lambda: "desktop")                      # Desktop chosen while stop() waited: desktop codes
         assert mode_writes(c) == ["desktop"] and [z for z, _ in binding_writes(c)] == [5, 8]
     run(go())
+
+
+def test_desktop_settled_only_after_the_latest_reapply_was_seen(tmp_path):
+    # Final review 2: Desktop counts as on the pad only when this loop wrote it after the latest reapply.
+    async def go():
+        c, r, ca, _ = setup(tmp_path)
+        assert ca.desktop_settled is False
+        ca.start()
+        await desktop_written(c, ca)
+        assert ca.desktop_settled is True
+        r.applying = 1                          # a reapply running: it writes the stored mode (Auto = Gamepad)
+        assert ca.desktop_settled is False
+        r.applying = 0
+        r.applies += 1                          # a reapply ran and the loop has not seen it yet
+        assert ca.written_mode == "desktop" and ca.desktop_settled is False
+        await ca.run_once()                     # seen: the written mode is unknown again
+        assert ca.desktop_settled is False
+        for _ in range(2):
+            await ca.run_once()
+        assert mode_writes(c) == ["desktop", "desktop"] and ca.desktop_settled is True
+        await ca.stop()
+        assert ca.desktop_settled is False      # stop() wrote Gamepad
+    run(go())

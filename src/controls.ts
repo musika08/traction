@@ -163,9 +163,10 @@ export function isBackButton(button: string): boolean {
   return button === 'back_left' || button === 'back_right';
 }
 
-// Picker options for a Primary or Secondary: Factory first, then the actions.
-export function actionOptions(): { data: string; label: string }[] {
-  return [{ data: 'factory', label: FACTORY_LABEL }, ...ACTIONS];
+// Picker options for a Primary or Secondary: Factory first, then the actions. M1 and M2 (`back`) have no Factory
+// choice (their factory binding is the "Use as secondary function" switch): Nothing, then the actions.
+export function actionOptions(back = false): { data: string; label: string }[] {
+  return back ? [...ACTIONS] : [{ data: 'factory', label: FACTORY_LABEL }, ...ACTIONS];
 }
 
 function actionLabel(id: string | undefined, labels: Record<string, string>): string {
@@ -196,12 +197,19 @@ export function backSwitchOn(button: string, state: { m1_secondary?: boolean; m2
   return false;
 }
 
-// M1 and M2 keep their Primary for when the switch is off; while it is on they are the Shift key.
-export function primaryEnabled(button: string, state: { m1_secondary?: boolean; m2_secondary?: boolean }): boolean {
-  return !backSwitchOn(button, state);
+// M1 and M2 keep their Primary for when the switch is off; while it is on they are the Shift key. `pending` is the
+// switch's target while its change is being written (the picker follows the toggle), else undefined.
+export function primaryEnabled(
+  button: string,
+  state: { m1_secondary?: boolean; m2_secondary?: boolean },
+  pending?: boolean,
+): boolean {
+  if (!isBackButton(button)) return true;
+  return !(pending ?? backSwitchOn(button, state));
 }
 
-// The list line of a button: M1 and M2 show the Primary only, or the switch while it is on.
+// The list line of a button: M1 and M2 show the switch while it is on, else their Primary only ("Nothing" when none:
+// with the switch off and no Primary the button does nothing).
 export function buttonSummary(
   button: string,
   entry: { primary?: string; secondary?: string } | undefined,
@@ -209,7 +217,15 @@ export function buttonSummary(
   labels: Record<string, string>,
 ): string {
   if (!isBackButton(button)) return rowSummary(entry, labels);
-  return backSwitchOn(button, state) ? BACK_SECONDARY_LABEL : rowSummary(entry, labels, true);
+  if (backSwitchOn(button, state)) return BACK_SECONDARY_LABEL;
+  const p = entry?.primary;
+  return !p || p === 'factory' ? labels.nothing ?? 'Nothing' : rowSummary(entry, labels, true);
+}
+
+// The mapping set being edited: fixed from the first state that names the live set, so it does not flip while the
+// owner edits when Auto changes the mode on the pad. Only the Mapping set picker changes it afterwards.
+export function keepPickedSet(current: string | null, live: string | undefined): string | null {
+  return current ?? live ?? null;
 }
 
 // Secondary functions are reached through a back button used as the secondary function; with neither, the stored

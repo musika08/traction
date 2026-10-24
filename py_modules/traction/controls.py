@@ -103,12 +103,12 @@ async def set_touchscreen(client, enabled: bool) -> dict:
 async def write_zones(client, chosen: dict, mode: str, zones, logger: Optional[logging.Logger] = None,
                       watch: bool = True) -> dict:
     """Writes each zone's four slots for `mode` from that mode's set ("desktop": the owner's Desktop set over
-    G-Helper's desktop defaults; gamepad/auto: the Gamepad set over the gamepad defaults). Stops at the first failure; `written` lists the zones that landed. `reset` is True when the pad went away
-    after a write (the helper then wrote the factory set, or tried to: data.reset true or false); a refusal before
-    the write ("Windows does not see the gamepad", data null) is not a reset: nothing was written. `uncertain` is the
-    zone whose reply failed on the way (it may have landed), else None. watch False asks the helper for no pad check,
-    no polling and no factory reset (Desktop mode hides the XInput pad). Each kind of failure is logged once until a
-    write lands."""
+    G-Helper's desktop defaults; gamepad/auto: the Gamepad set over the gamepad defaults). Stops at the first failure;
+    `written` lists the zones that landed. `reset` is True when the pad went away after a write (the helper then wrote
+    the factory set, or tried to: data.reset true or false); a refusal before the write ("Windows does not see the
+    gamepad", data null) is not a reset: nothing was written. `uncertain` is the zone whose reply failed on the way
+    (it may have landed), else None. watch False asks the helper for no pad check, no polling and no factory reset
+    (Desktop mode hides the XInput pad). Each kind of failure is logged once until a write lands."""
     set_name = "desktop" if mode == "desktop" else "gamepad"
     log = logger or logging.getLogger("traction")
     written = []
@@ -141,8 +141,9 @@ async def write_zones(client, chosen: dict, mode: str, zones, logger: Optional[l
 def note_written(settings: Settings, chosen: dict, mode: str, written, uncertain: Optional[int] = None) -> bool:
     """Updates settings.touched_zones after zones were written from `chosen` for `mode`: a zone with an owner choice
     (in either set, or a back switch off) is touched, and so is every zone written in Desktop, since desktop slots are
-    not the Gamepad factory set; a zone leaves only after a Gamepad (non-desktop) factory write. The `uncertain` zone (its reply failed on the way, so it may hold what was sent) is touched,
-    so a later write puts it right. True when the set changed (the caller saves)."""
+    not the Gamepad factory set; a zone leaves only after a Gamepad (non-desktop) factory write. The `uncertain` zone
+    (its reply failed on the way, so it may hold what was sent) is touched, so a later write puts it right. True when
+    the set changed (the caller saves)."""
     changed = set(bindings.zones_with_choices(chosen))
     before = set(settings.touched_zones)
     for zone in written:
@@ -164,9 +165,10 @@ def forget_bindings(settings: Settings) -> None:
 
 async def apply_bindings(client, settings: Settings, mode: str, logger: Optional[logging.Logger] = None) -> dict:
     """Writes the zones with a choice in either set plus the touched ones, from `mode`'s set (factory slots where that
-    set has no choice), so the pad matches the active set whatever the firmware did on the mode switch; Desktop writes are not watched (the pad is hidden in Desktop mode). When the pad went away after a
-    write (the helper reset it to the factory set) the stored bindings and touched zones are cleared and saved, so no
-    later reapply writes them again; the caller then has the mode and vibration rewritten (`reset` True)."""
+    set has no choice), so the pad matches the active set whatever the firmware did on the mode switch; Desktop writes
+    are not watched (the pad is hidden in Desktop mode). When the pad went away after a write (the helper reset it to
+    the factory set) the stored bindings and touched zones are cleared and saved, so no later reapply writes them
+    again; the caller then has the mode and vibration rewritten (`reset` True)."""
     zones = sorted(set(bindings.zones_with_choices(settings.bindings)) | set(settings.touched_zones))
     if not zones:
         return _result(True, "", reset=False, transport=False, written=[], uncertain=None)
