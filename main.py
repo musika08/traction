@@ -34,8 +34,10 @@ MOVE_FAILED = ("Overdrive's Armoury Crate record could not be moved to the share
 OVERDRIVE_POLL = 5.0             # seconds between checks of an old Overdrive's version
 MOVE_WAIT = 2.0                  # how long a move of Overdrive's orphaned record waits for the record lock
 ACTION_IDS = frozenset(a[0] for a in bindings.ACTIONS)
-COMBO_ZONES = {b[0]: b[2] for b in bindings.BUTTONS if b[0] not in bindings.BACK}
+BUTTON_ZONES = {b[0]: b[2] for b in bindings.BUTTONS}
 BACK_ZONE = 8
+BACK_SIDES = {"left": "back_left", "right": "back_right"}   # M2 = left back button, M1 = right
+SLOTS = ("primary", "secondary")
 UNREAD = {"controller": {"found": False}, "touchscreen": {"found": False, "enabled": False}}
 
 
@@ -77,11 +79,19 @@ def _fail(message: str) -> dict:
     return {"ok": False, "message": message}
 
 
-def _buttons(chosen) -> dict:
-    """get_state's buttons: the back buttons, the combos and how many combos are changed."""
+def _set_of(mode: str) -> str:
+    """The mapping set a controller mode uses: Desktop its own, Gamepad and Auto (until it writes Desktop) Gamepad."""
+    return "desktop" if mode == "desktop" else "gamepad"
+
+
+def _buttons(chosen, live: str) -> dict:
+    """get_state's buttons: which set is on the pad now, the two back switches (shared by both sets) and, for each
+    set, every button's Primary and Secondary ("factory" where the owner has no choice)."""
     b = bindings.clean(chosen)
-    return {"back_left": b["back_left"], "back_right": b["back_right"], "combos": dict(b["combos"]),
-            "changed": len(b["combos"])}
+    sets = {name: {bid: {slot: b[name].get(bid, {}).get(slot, bindings.FACTORY) for slot in SLOTS}
+                   for bid in BUTTON_ZONES}
+            for name in bindings.SETS}
+    return {"live": live, "m1_secondary": b["m1_secondary"], "m2_secondary": b["m2_secondary"], "sets": sets}
 
 
 class Plugin:
@@ -245,7 +255,7 @@ class Plugin:
             "controller": {"mode": s.controller_mode, "found": False},
             "vibration": bool(s.grip_vibration),
             "touchscreen": dict(UNREAD["touchscreen"]),
-            "buttons": _buttons(s.bindings),
+            "buttons": _buttons(s.bindings, _set_of(self._live_mode(s))),
             "blocked": "", "note": "", "busy": False, "warning": "", "unavailable": "",
         }
         if self.client is None:
@@ -378,24 +388,26 @@ class Plugin:
 
     # ---------- buttons ----------
 
-    def _live_mode(self) -> str:
+    def _live_mode(self, s=None) -> str:
         """The mode on the pad now: the stored one, or under Auto the one the loop last wrote (Gamepad until it
         has written Desktop)."""
-        mode = self.settings.controller_mode
+        mode = (s or self.settings).controller_mode
         if mode == "auto":
             ca = self.controller_auto
             return "desktop" if ca is not None and ca.written_mode == "desktop" else "gamepad"
         return mode
 
-    async def _change_buttons(self, change, zones) -> dict:
+    async def _change_buttons(self, change, zones, set_name=None) -> dict:
         """Under the reapplier's lock: builds the new bindings with `change(current)` from the bindings stored at
-        that moment (a setter waiting for the lock never stores a stale set), writes `zones` for the live mode, then
-        stores them. Not stored when the write was refused (the pad not seen included: nothing was written); when
-        only some zones landed (Reset buttons), only those zones' new choices are stored and the next reapply tick
-        writes the zones again. When the pad went away after the write, the helper reset it to the factory set: the
-        stored bindings and touched zones are cleared, and the next tick writes the mode and vibration again.
-        In Desktop mode nothing is written (the Desktop slots do not depend on the owner's choice): the choice is
-        stored and the zones marked touched, so the next Gamepad write puts them right."""
+        that moment (a setter waiting for the lock never stores a stale set). A change to the set of the mode that is
+        not on the pad (`set_name` other than the live set) is only stored: the next write of that mode puts it on the
+        pad (controls.apply_bindings writes the zones with a choice in either set). Otherwise (`set_name` None: the
+        back switches and Reset all, which act on the live set) `zones` are written for the live mode, watched in
+        Gamepad, unwatched in Desktop (the pad is hidden there), then stored. Not stored when the write was refused
+        (the pad not seen included: nothing was written); when only some zones landed (Reset all buttons), only those
+        zones' new choices are stored and the next reapply tick writes the zones again. When the pad went away after
+        the write, the helper reset it to the factory set: both sets are cleared, both switches go back on, the
+        touched zones are cleared, and the next tick writes the mode and vibration again."""
         s = self.settings
         async with self.reapplier.user_change():
             if self._busy():   # an Armoury switch may have begun while this waited for the lock
@@ -403,11 +415,11 @@ class Plugin:
             old = bindings.clean(s.bindings)
             new = change(bindings.clean(s.bindings))
             note = ""
-            if self._live_mode() == "desktop":
-                s.touched_zones |= set(zones)
+            mode = self._live_mode()
+            if set_name is not None and set_name != _set_of(mode):
+                pass   # the other set: stored only, written when its mode is
             elif await self._controller_found():
-                mode = self._live_mode()
-                r = await controls.write_zones(self.client, new, mode, zones, decky.logger)
+                r = await controls.write_zones(self.client, new, mode, zones, decky.logger, watch=mode != "desktop")
                 if r.get("reset"):
                     controls.forget_bindings(s)
                     self.reapplier.rerun = True   # the factory set wrote Gamepad and vibration 100
@@ -429,43 +441,54 @@ class Plugin:
             s.user_set = True   # reapplied with the controller mode after sleep
             return {"ok": True, "message": " ".join(m for m in (note, self._save()) if m)}
 
-    async def set_back_button(self, side, value) -> dict:
-        """A back button as Shift (the combos' modifier, "shift") or as one action. Writes zone 8 only."""
-        refused = self._refuse_controller()
-        if refused:
-            return refused
-        if side not in ("left", "right"):
-            return _fail("Expected the left or right back button.")
-        if not isinstance(value, str) or (value != "shift" and value not in ACTION_IDS):
-            return _fail("Unknown button action.")
-
-        def change(b):
-            b["back_" + side] = value
-            return b
-        return await self._change_buttons(change, [BACK_ZONE])
-
-    async def set_combo(self, button, action) -> dict:
-        """What Shift + `button` does; "unchanged" removes the choice (the zone is written with the factory combo).
-        Writes that button's zone only."""
-        refused = self._refuse_controller()
-        if refused:
-            return refused
-        if not isinstance(button, str) or button not in COMBO_ZONES:
+    @staticmethod
+    def _check_button(set_name, button):
+        """A refusal for an unknown set or button, else None."""
+        if not isinstance(set_name, str) or set_name not in bindings.SETS:
+            return _fail("Expected the Gamepad or Desktop set.")
+        if not isinstance(button, str) or button not in BUTTON_ZONES:
             return _fail("Unknown button.")
-        if not isinstance(action, str) or (action != "unchanged" and action not in ACTION_IDS):
+        return None
+
+    async def set_button(self, set_name, button, slot, action) -> dict:
+        """One button's Primary or Secondary in the Gamepad or Desktop set; "factory" removes the choice (the zone is
+        written with the factory slot). The live set writes that button's zone; the other set is only stored."""
+        refused = self._refuse_controller() or self._check_button(set_name, button)
+        if refused:
+            return refused
+        if not isinstance(slot, str) or slot not in SLOTS:
+            return _fail("Expected the primary or secondary function.")
+        if slot == "secondary" and button in bindings.BACK:
+            return _fail("M1 and M2 have no secondary function.")
+        if not isinstance(action, str) or (action != bindings.FACTORY and action not in ACTION_IDS):
             return _fail("Unknown button action.")
+        return await self._change_buttons(lambda b: bindings.set_choice(b, set_name, button, slot, action),
+                                          [BUTTON_ZONES[button]], set_name)
 
-        def change(b):
-            if action == "unchanged":
-                b["combos"].pop(button, None)
-            else:
-                b["combos"][button] = action
-            return b
-        return await self._change_buttons(change, [COMBO_ZONES[button]])
+    async def set_back_secondary(self, side, on) -> dict:
+        """The "use as secondary function" switch of the left (M2) or right (M1) back button, shared by both sets:
+        writes zone 8 for the live mode."""
+        refused = self._refuse_controller()
+        if refused:
+            return refused
+        if not isinstance(side, str) or side not in BACK_SIDES:
+            return _fail("Expected the left or right back button.")
+        if not isinstance(on, bool):
+            return _fail("Expected on or off.")
+        return await self._change_buttons(lambda b: bindings.set_back_secondary(b, BACK_SIDES[side], on),
+                                          [BACK_ZONE])
 
-    async def reset_buttons(self) -> dict:
-        """Writes all 9 zones with the Gamepad factory set, then clears the stored bindings (touched zones leave as
-        their factory write lands). In Desktop mode: cleared, all 9 zones marked touched, nothing written. A single
+    async def reset_button(self, set_name, button) -> dict:
+        """One button's Primary and Secondary in that set back to factory (live set: its zone is written)."""
+        refused = self._refuse_controller() or self._check_button(set_name, button)
+        if refused:
+            return refused
+        return await self._change_buttons(lambda b: bindings.reset_button(b, set_name, button),
+                                          [BUTTON_ZONES[button]], set_name)
+
+    async def reset_all_buttons(self) -> dict:
+        """Clears both sets and turns both back switches on, writing all 9 zones with the live set's factory slots
+        (Desktop unwatched; the zones written in Desktop stay touched until the Gamepad factory write lands). A single
         press, no confirmation (owner rule)."""
         refused = self._refuse_controller()
         if refused:

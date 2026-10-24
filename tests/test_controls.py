@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 from fake_helper import FakeClient, fail, ok
-from traction import controls
+from traction import bindings, controls
 from traction.settings import Settings
 
 RESTARTED = "Traction helper restarted, try again"
@@ -204,12 +204,17 @@ def test_apply_controller_stops_after_transport_failure(tmp_path):
 
 from fake_helper import PAD_NOT_SEEN, RESET_FAILED, RESET_MESSAGE  # noqa: E402
 
-CHOSEN = {"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}}
-FACTORY = {"back_left": "shift", "back_right": "shift", "combos": {}}
+# The v1 mapping (M1 as B, Shift+A = Screenshot) as v2 loads it: M1's switch off, B its Primary in both sets.
+CHOSEN = bindings.clean({"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}})
+FACTORY = bindings.clean(None)
 Z5_GAMEPAD = ["01-01", "04-03-82-88-1B", "01-02", "00-00"]
 Z5_DESKTOP = ["02-5A", "00-00", "02-76", "00-00"]
-Z8_GAMEPAD = ["02-8E", "02-8E", "01-02", "02-8F"]
-Z8_DESKTOP = ["02-8E", "02-8E", "02-8F", "02-8F"]
+Z8_GAMEPAD = ["02-8E", "02-8E", "01-02", "02-8F"]   # the bytes v1 wrote for M1 as B (proven on the device)
+Z8_DESKTOP = Z8_GAMEPAD                              # the switch is shared: M1 is B in Desktop too
+
+
+def copy(b):
+    return bindings.clean(b)
 
 
 def binding_writes(c):
@@ -222,7 +227,7 @@ def test_apply_bindings_writes_only_changed_zones(tmp_path):
         s = settings(tmp_path)
         assert (await controls.apply_bindings(c, s, "gamepad"))["ok"]
         assert binding_writes(c) == []                         # factory set: nothing written
-        s.bindings = dict(CHOSEN)
+        s.bindings = copy(CHOSEN)
         r = await controls.apply_bindings(c, s, "gamepad")
         assert r["ok"] and r["message"] == ""
         assert binding_writes(c) == [(5, Z5_GAMEPAD), (8, Z8_GAMEPAD)]
@@ -239,7 +244,7 @@ def test_apply_bindings_writes_only_changed_zones(tmp_path):
 def test_apply_controller_writes_bindings_right_after_the_mode(tmp_path):
     async def go():
         c = FakeClient()
-        s = settings(tmp_path, bindings=dict(CHOSEN))
+        s = settings(tmp_path, bindings=copy(CHOSEN))
         seq = []
         for mode in ("gamepad", "desktop", "gamepad"):        # Review Focus 3
             c.calls.clear()
@@ -258,7 +263,7 @@ def test_apply_controller_skips_bindings_when_the_mode_failed(tmp_path):
     async def go():
         c = FakeClient()
         c.handlers["set_controller_mode"] = handler(fail("mode refused"))
-        r = await controls.apply_controller(c, settings(tmp_path, bindings=dict(CHOSEN)), "desktop")
+        r = await controls.apply_controller(c, settings(tmp_path, bindings=copy(CHOSEN)), "desktop")
         assert not r["ok"]
         assert binding_writes(c) == []                         # desktop slots on a gamepad-mode pad: never
     run(go())
@@ -269,7 +274,7 @@ def test_reset_reply_clears_and_saves_bindings(tmp_path):
         async def go():
             c = FakeClient()
             c.bindings_reply = outcome
-            s = settings(tmp_path, bindings=dict(CHOSEN), user_set=True)
+            s = settings(tmp_path, bindings=copy(CHOSEN), user_set=True)
             s.save()
             r = await controls.apply_controller(c, s, "gamepad")
             assert r["ok"] and r["warning"] == message          # the mode and the vibration landed
@@ -288,7 +293,7 @@ def test_pad_not_seen_keeps_bindings_and_logs_once(tmp_path, caplog):
     async def go():
         c = FakeClient()
         c.bindings_reply = "not_seen"
-        s = settings(tmp_path, bindings=dict(CHOSEN))
+        s = settings(tmp_path, bindings=copy(CHOSEN))
         for _ in range(3):
             r = await controls.apply_controller(c, s, "desktop")
             assert r["ok"] and r["warning"] == PAD_NOT_SEEN
@@ -304,10 +309,10 @@ def test_pad_not_seen_keeps_bindings_and_logs_once(tmp_path, caplog):
 def test_touched_zones_follow_the_writes(tmp_path):
     async def go():
         c = FakeClient()
-        s = settings(tmp_path, bindings=dict(CHOSEN))
+        s = settings(tmp_path, bindings=copy(CHOSEN))
         await controls.apply_bindings(c, s, "gamepad")
         assert s.touched_zones == {5, 8}
-        s.bindings = {"back_left": "shift", "back_right": "b", "combos": {}}   # "a" back to unchanged
+        s.bindings = bindings.set_choice(CHOSEN, "gamepad", "a", "secondary", "factory")   # "a" back to factory
         c.calls.clear()
         await controls.apply_bindings(c, s, "desktop")
         assert binding_writes(c) == [(5, Z5_DESKTOP), (8, Z8_DESKTOP)]
@@ -332,7 +337,7 @@ def test_desktop_writes_without_the_pad_watch(tmp_path):
     # I2b: Desktop mode hides the XInput pad, so its writes ask for no pad check, polling or factory reset.
     async def go():
         c = FakeClient()
-        s = settings(tmp_path, bindings=dict(CHOSEN))
+        s = settings(tmp_path, bindings=copy(CHOSEN))
         await controls.apply_bindings(c, s, "desktop")
         assert [a.get("watch") for a in binding_args(c)] == [False, False]
         c.calls.clear()
@@ -345,11 +350,11 @@ def test_desktop_writes_without_the_pad_watch(tmp_path):
 def test_apply_controller_reports_a_reset(tmp_path):
     async def go():
         c = FakeClient()
-        s = settings(tmp_path, bindings=dict(CHOSEN))
+        s = settings(tmp_path, bindings=copy(CHOSEN))
         r = await controls.apply_controller(c, s, "gamepad")
         assert r["reset"] is False
         c.bindings_reply = "reset"
-        s.bindings = dict(CHOSEN)
+        s.bindings = copy(CHOSEN)
         r = await controls.apply_controller(c, s, "gamepad")
         assert r["ok"] and r["reset"] is True
     run(go())
@@ -360,7 +365,7 @@ def test_transport_failure_marks_the_zone_touched(tmp_path):
     async def go():
         c = FakeClient()
         c.handlers["set_bindings"] = handler(fail(RESTARTED))
-        s = settings(tmp_path, bindings={"back_left": "shift", "back_right": "shift", "combos": {"a": "tab"}})
+        s = settings(tmp_path, bindings=bindings.set_choice({}, "gamepad", "a", "secondary", "tab"))
         r = await controls.apply_bindings(c, s, "desktop")
         assert not r["ok"] and r["transport"] and r["uncertain"] == 5
         assert s.touched_zones == {5} and Settings.load(s.path).touched_zones == {5}
@@ -391,4 +396,67 @@ def test_bindings_in_flight_counts_the_calls(tmp_path):
         with pytest.raises(RuntimeError):
             await controls.write_zones(c, CHOSEN, "gamepad", [5])
         assert not controls.bindings_in_flight()
+    run(go())
+
+
+def test_v1_file_first_reapply_writes_the_v1_zone_8_bytes(tmp_path):
+    """Review Focus 1: a v1 settings file, loaded as v2, gets the same zone 8 bytes v1 wrote for it."""
+    import json
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"user_set": True, "bindings": {"back_left": "shift", "back_right": "b",
+                                                            "combos": {"a": "screenshot"}}}), encoding="utf-8")
+
+    async def go():
+        c = FakeClient()
+        s = Settings.load(str(p))
+        assert (await controls.apply_bindings(c, s, "gamepad"))["ok"]
+        assert binding_writes(c) == [(5, Z5_GAMEPAD), (8, ["02-8E", "02-8E", "01-02", "02-8F"])]
+    run(go())
+
+
+def test_each_mode_writes_both_sets_zones(tmp_path):
+    """Ruling: every mode write covers the zones with a choice in EITHER set (the other set's factory slots there)."""
+    async def go():
+        c = FakeClient()
+        b = bindings.set_choice({}, "desktop", "du", "primary", "page_up")
+        b = bindings.set_choice(b, "gamepad", "a", "primary", "b")
+        s = settings(tmp_path, bindings=b)
+        await controls.apply_bindings(c, s, "gamepad")
+        assert binding_writes(c) == [(1, ["01-09", "05-19", "01-0A", "04-02-82-23"]),
+                                     (5, ["01-02", "00-00", "01-02", "00-00"])]
+        assert s.touched_zones == {1, 5}
+        c.calls.clear()
+        await controls.apply_bindings(c, s, "desktop")
+        assert binding_writes(c) == [(1, ["02-96", "05-19", "02-99", "04-02-82-23"]), (5, Z5_DESKTOP)]
+        assert [a.get("watch") for a in binding_args(c)] == [False, False]
+    run(go())
+
+
+def test_desktop_write_marks_its_zones_touched(tmp_path):
+    """Desktop slots are not the Gamepad factory set: a zone written in Desktop is rewritten at the next Gamepad
+    write, even with no choice left (a Desktop Reset all buttons)."""
+    async def go():
+        c = FakeClient()
+        s = settings(tmp_path)
+        r = await controls.write_zones(c, FACTORY, "desktop", [2, 3], watch=False)
+        assert controls.note_written(s, FACTORY, "desktop", r["written"]) is True
+        assert s.touched_zones == {2, 3}
+        r = await controls.write_zones(c, FACTORY, "gamepad", [2, 3])
+        controls.note_written(s, FACTORY, "gamepad", r["written"])
+        assert s.touched_zones == set()
+    run(go())
+
+
+def test_reset_reply_clears_both_sets_and_switches(tmp_path):
+    """Review Focus 5: a reset reply clears both sets, the switches go back on, no touched zone is left."""
+    async def go():
+        c = FakeClient()
+        b = bindings.set_choice(CHOSEN, "desktop", "a", "primary", "esc")
+        b = bindings.set_back_secondary(b, "back_left", False)
+        s = settings(tmp_path, bindings=b, touched_zones={3})
+        c.bindings_reply = "reset"
+        r = await controls.apply_bindings(c, s, "gamepad")
+        assert r["reset"] is True
+        assert s.bindings == FACTORY and s.touched_zones == set()
+        assert Settings.load(s.path).bindings == FACTORY
     run(go())

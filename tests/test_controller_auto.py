@@ -3,6 +3,7 @@ for the class's contract)."""
 import asyncio
 
 from fake_helper import FakeClient, fail, ok
+from traction import bindings
 from traction.controller_auto import ControllerAuto
 from traction.reapply import Reapplier
 from traction.settings import Settings
@@ -465,7 +466,8 @@ def test_without_autotdp_the_loop_samples_itself(tmp_path):
 
 # ---------- button bindings (Review Focus 3) ----------
 
-CHOSEN = {"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}}
+# The v1 mapping (M1 as B, Shift+A = Screenshot) as v2 loads it: M1's switch off, B its Primary in both sets.
+CHOSEN = bindings.clean({"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}})
 
 
 def binding_writes(c):
@@ -475,13 +477,13 @@ def binding_writes(c):
 def test_auto_switch_writes_the_bindings_for_that_mode(tmp_path):
     async def go():
         c, r, ca, _ = setup(tmp_path)
-        r.settings.bindings = dict(CHOSEN)
+        r.settings.bindings = bindings.clean(CHOSEN)
         ca.start()
         front(c, ["steam.exe"])
         for _ in range(3):
             await ca.run_once()
         gamepad = [(5, ["01-01", "04-03-82-88-1B", "01-02", "00-00"]), (8, ["02-8E", "02-8E", "01-02", "02-8F"])]
-        desktop = [(5, ["02-5A", "00-00", "02-76", "00-00"]), (8, ["02-8E", "02-8E", "02-8F", "02-8F"])]
+        desktop = [(5, ["02-5A", "00-00", "02-76", "00-00"]), (8, ["02-8E", "02-8E", "01-02", "02-8F"])]
         assert [x[0] for x in c.writes()] == ["set_controller_mode", "set_bindings", "set_bindings"]
         assert binding_writes(c) == gamepad
         c.calls.clear()
@@ -513,7 +515,7 @@ def test_auto_switch_without_bindings_writes_only_the_mode(tmp_path):
 def test_auto_failed_mode_write_skips_the_bindings(tmp_path):
     async def go():
         c, r, ca, _ = setup(tmp_path)
-        r.settings.bindings = dict(CHOSEN)
+        r.settings.bindings = bindings.clean(CHOSEN)
         c.handlers["set_controller_mode"] = lambda _a: _reply(fail("Controller not found"))
         ca.start()
         front(c, ["msedge.exe"])
@@ -534,7 +536,7 @@ def test_auto_switch_reset_is_shown_in_the_reapplier_warning(tmp_path):
     from fake_helper import RESET_MESSAGE
     async def go():
         c, r, ca, _ = setup(tmp_path)
-        r.settings.bindings = dict(CHOSEN)
+        r.settings.bindings = bindings.clean(CHOSEN)
         c.bindings_reply = "reset"
         ca.start()
         front(c, ["msedge.exe"])
@@ -543,7 +545,7 @@ def test_auto_switch_reset_is_shown_in_the_reapplier_warning(tmp_path):
             await ca.run_once()
         assert ca.written_mode == "desktop"
         assert r.warning == RESET_MESSAGE
-        assert r.settings.bindings["combos"] == {} and r.settings.touched_zones == set()
+        assert r.settings.bindings == bindings.clean(None) and r.settings.touched_zones == set()
         assert r.rerun is True                                # I3: the next tick rewrites mode and vibration
         await ca.stop()
     run(go())
@@ -553,7 +555,7 @@ def test_stop_writes_the_bindings_only_after_desktop(tmp_path):
     # M1: only Desktop leaves Desktop codes in the zones; after Gamepad the zones already hold the owner's set.
     async def go():
         c, r, ca, _ = setup(tmp_path)
-        r.settings.bindings = dict(CHOSEN)
+        r.settings.bindings = bindings.clean(CHOSEN)
         ca.start()
         front(c, ["steam.exe"])
         for _ in range(3):

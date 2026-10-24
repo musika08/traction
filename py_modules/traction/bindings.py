@@ -8,7 +8,8 @@ the factory secondary is the same for both). The two back buttons (M1 = back_rig
 switch "use as secondary function" (default on, shared by both sets): on, both slots hold the factory Shift code; off,
 the button slot holds its Primary (Nothing when none) and the secondary slot keeps the Shift code (the zone-8 report
 proven on the device: 02-8E, 02-8E, 01-02, 02-8F for M1 as B). The v1 shape ({"back_left": <action id | "shift">,
-"back_right": ..., "combos": {<button id>: <action id>}}) is converted by clean().
+"back_right": ..., "combos": {<button id>: <action id>}}) is converted by clean(): a v1 back-button action becomes
+that button's Primary in both sets with its switch off (the switch is shared, so the button is not dead in Desktop).
 """
 
 # (id, label, code)
@@ -92,7 +93,7 @@ def clean(raw) -> dict:
     out = _blank()
     if not isinstance(raw, dict):
         return out
-    if "gamepad" in raw or "desktop" in raw:
+    if any(k in raw for k in SETS) or any(k in raw for k in _SWITCH.values()):
         for name in SETS:
             sec = raw.get(name)
             if not isinstance(sec, dict):
@@ -114,7 +115,8 @@ def clean(raw) -> dict:
     for k in BACK:   # v1: a back button action becomes its gamepad Primary with the switch off
         v = raw.get(k)
         if isinstance(v, str) and v != "shift" and v in _CODE:
-            out["gamepad"][k] = {"primary": v}
+            for name in SETS:
+                out[name][k] = {"primary": v}
             out[_SWITCH[k]] = False
     combos = raw.get("combos")
     if isinstance(combos, dict):
@@ -124,12 +126,8 @@ def clean(raw) -> dict:
     return out
 
 
-def _set_name(set_name) -> str:
-    if set_name is True:   # v1 callers passed `desktop: bool`
-        return "desktop"
-    if set_name is False:
-        return "gamepad"
-    return set_name
+def _is_id(v, known) -> bool:
+    return isinstance(v, str) and v in known
 
 
 def _slots(bid: str, b: dict, set_name: str) -> list:
@@ -149,8 +147,10 @@ def _slots(bid: str, b: dict, set_name: str) -> list:
 
 def zone_slots(zone: int, bindings: dict, set_name: str) -> list:
     """Four codes for the zone in the given set: first button, its combo, second button, its combo."""
+    if not _is_id(set_name, SETS):
+        raise ValueError(f"unknown mapping set: {set_name!r}")
     b = clean(bindings)
-    name = _set_name(set_name)
+    name = set_name
     out: list = []
     for bid, _label, _z, _side in sorted((x for x in BUTTONS if x[2] == zone), key=lambda x: x[3]):
         out += _slots(bid, b, name)
@@ -167,14 +167,12 @@ def zones_with_choices(bindings: dict) -> list:
     return sorted(zones)
 
 
-changed_zones = zones_with_choices   # v1 name, until the callers move over
-
-
 def set_choice(bindings: dict, set_name: str, button: str, slot: str, action) -> dict:
     """A new cleaned dict with the button's Primary or Secondary set; FACTORY (or None) removes it. Unknown ids,
     a Secondary on a back button, or an unknown set leave the settings as they were."""
     b = clean(bindings)
-    if set_name not in SETS or button not in _BUTTON or slot not in _SLOTS or (slot == "secondary" and button in BACK):
+    if not (_is_id(set_name, SETS) and _is_id(button, _BUTTON) and _is_id(slot, _SLOTS)) or (
+            slot == "secondary" and button in BACK):
         return b
     if action is None or action == FACTORY:
         entry = b[set_name].get(button)
@@ -183,7 +181,7 @@ def set_choice(bindings: dict, set_name: str, button: str, slot: str, action) ->
             if not entry:
                 del b[set_name][button]
         return b
-    if isinstance(action, str) and action in _CODE:
+    if _is_id(action, _CODE):
         b[set_name].setdefault(button, {})[slot] = action
     return b
 
@@ -191,7 +189,7 @@ def set_choice(bindings: dict, set_name: str, button: str, slot: str, action) ->
 def set_back_secondary(bindings: dict, side: str, on: bool) -> dict:
     """A new cleaned dict with the "use as secondary function" switch of back_left (M2) / back_right (M1) set."""
     b = clean(bindings)
-    if side in _SWITCH and isinstance(on, bool):
+    if _is_id(side, _SWITCH) and isinstance(on, bool):
         b[_SWITCH[side]] = on
     return b
 
@@ -199,7 +197,7 @@ def set_back_secondary(bindings: dict, side: str, on: bool) -> dict:
 def reset_button(bindings: dict, set_name: str, button: str) -> dict:
     """A new cleaned dict with the button's Primary and Secondary in that set back to factory."""
     b = clean(bindings)
-    if set_name in SETS:
+    if _is_id(set_name, SETS) and _is_id(button, _BUTTON):
         b[set_name].pop(button, None)
     return b
 

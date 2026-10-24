@@ -2,6 +2,7 @@
 import asyncio
 
 from fake_helper import FakeClient, ok
+from traction import bindings
 from traction.armoury_record import ArmouryRecord
 from traction.reapply import Reapplier
 from traction.settings import Settings
@@ -217,13 +218,14 @@ def test_skip_message_names_traction(tmp_path, caplog):
 
 from fake_helper import PAD_NOT_SEEN, RESET_MESSAGE  # noqa: E402
 
-CHOSEN = {"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}}
+# The v1 mapping (M1 as B, Shift+A = Screenshot) as v2 loads it: M1's switch off, B its Primary in both sets.
+CHOSEN = bindings.clean({"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}})
 
 
 def test_reapply_writes_bindings_with_the_long_timeout(tmp_path):
     async def go():
         c = _controller_client()
-        s = make(tmp_path, bindings=dict(CHOSEN))
+        s = make(tmp_path, bindings=bindings.clean(CHOSEN))
         r = Reapplier(c, s, clock=Clock(), power_source=Power())
         assert await r.apply_all() is True
         assert [x[0] for x in c.writes()] == ["set_controller_mode", "set_bindings", "set_bindings",
@@ -237,7 +239,7 @@ def test_reapply_warns_when_the_pad_is_not_seen_or_reset(tmp_path):
     async def go():
         c = _controller_client()
         c.bindings_reply = "not_seen"
-        s = make(tmp_path, bindings=dict(CHOSEN))
+        s = make(tmp_path, bindings=bindings.clean(CHOSEN))
         r = Reapplier(c, s, clock=Clock(), power_source=Power())
         await r.apply_all()
         assert r.warning == PAD_NOT_SEEN and r.rerun is False   # not a transport failure: not retried
@@ -245,7 +247,7 @@ def test_reapply_warns_when_the_pad_is_not_seen_or_reset(tmp_path):
         c.bindings_reply = "reset"
         await r.apply_all()
         assert r.warning == RESET_MESSAGE
-        assert s.bindings["combos"] == {} and s.bindings["back_right"] == "shift"
+        assert s.bindings == bindings.clean(None)               # both sets cleared, both switches on
         c.calls.clear()
         c.bindings_reply = "ok"
         await r.apply_all()
@@ -259,7 +261,7 @@ def test_reapply_reset_reply_reruns_with_the_owners_vibration(tmp_path):
     async def go():
         c = _controller_client()
         c.bindings_reply = "reset"
-        s = make(tmp_path, bindings=dict(CHOSEN), grip_vibration=False)
+        s = make(tmp_path, bindings=bindings.clean(CHOSEN), grip_vibration=False)
         r = Reapplier(c, s, clock=Clock(), power_source=Power())
         assert await r.apply_all() is True
         assert r.rerun is True

@@ -134,33 +134,57 @@ def test_migrate_not_run_when_traction_file_exists(tmp_path):
 
 # ---------- button bindings ----------
 
+FACTORY = {"gamepad": {}, "desktop": {}, "m1_secondary": True, "m2_secondary": True}
+
+
 def test_bindings_default_to_factory_and_older_files_load(tmp_path):
     p = tmp_path / "settings.json"
     p.write_text(json.dumps({"controller_mode": "desktop", "user_set": True}), encoding="utf-8")
     s = Settings.load(str(p))
-    assert s.bindings == {"back_left": "shift", "back_right": "shift", "combos": {}}
+    assert s.bindings == FACTORY
     assert s.controller_mode == "desktop"
+
+
+def test_v1_file_loads_as_v2(tmp_path):
+    """Review Focus 1: a v1 file keeps the owner's mapping (M1 as B, Shift+A = Screenshot) and touched zones."""
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"user_set": True, "touched_zones": [5, 8],
+                             "bindings": {"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}}}),
+                 encoding="utf-8")
+    s = Settings.load(str(p))
+    assert s.bindings == {"gamepad": {"back_right": {"primary": "b"}, "a": {"secondary": "screenshot"}},
+                          "desktop": {"back_right": {"primary": "b"}}, "m1_secondary": False, "m2_secondary": True}
+    assert s.touched_zones == {5, 8}
+    s.save()
+    saved = json.loads(p.read_text(encoding="utf-8"))
+    assert saved["bindings"] == {"gamepad": {"back_right": {"primary": "b"}, "a": {"secondary": "screenshot"}},
+                                 "desktop": {"back_right": {"primary": "b"}}, "m1_secondary": False}
+    assert Settings.load(str(p)).bindings == s.bindings
 
 
 def test_bindings_round_trip_and_junk_dropped(tmp_path):
     p = tmp_path / "settings.json"
     s = Settings.load(str(p))
-    s.bindings = {"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}}
+    s.bindings = {"gamepad": {"a": {"secondary": "screenshot"}}, "desktop": {}, "m1_secondary": True,
+                  "m2_secondary": False}
     s.save()
     saved = json.loads(p.read_text(encoding="utf-8"))
-    # only the owner's choices are stored (missing keys mean factory)
-    assert saved["bindings"] == {"back_right": "b", "combos": {"a": "screenshot"}}
-    assert Settings.load(str(p)).bindings == {"back_left": "shift", "back_right": "b",
-                                              "combos": {"a": "screenshot"}}
+    # only the owner's choices are stored (missing keys mean factory, a switch only when off)
+    assert saved["bindings"] == {"gamepad": {"a": {"secondary": "screenshot"}}, "m2_secondary": False}
+    assert Settings.load(str(p)).bindings == s.bindings
+    s.bindings = FACTORY
+    s.save()
+    assert "bindings" not in json.loads(p.read_text(encoding="utf-8"))
     p.write_text(json.dumps({"grip_vibration": False, "bindings": {
-        "back_left": "laser", "back_right": 3, "combos": {"a": "gone", "b": "esc", "back_left": "a", "zz": "a"}}}),
-        encoding="utf-8")
+        "gamepad": {"a": {"primary": "gone", "secondary": "esc"}, "zz": {"primary": "a"},
+                    "back_left": {"secondary": "a"}}, "desktop": 3, "m1_secondary": "no"}}), encoding="utf-8")
     s = Settings.load(str(p))
-    assert s.bindings == {"back_left": "shift", "back_right": "shift", "combos": {"b": "esc"}}
+    assert s.bindings == {"gamepad": {"a": {"secondary": "esc"}}, "desktop": {}, "m1_secondary": True,
+                          "m2_secondary": True}
     assert s.grip_vibration is False                       # the other fields are kept
     for bad in ("x", 1, None, ["a"]):
         p.write_text(json.dumps({"bindings": bad}), encoding="utf-8")
-        assert Settings.load(str(p)).bindings == {"back_left": "shift", "back_right": "shift", "combos": {}}
+        assert Settings.load(str(p)).bindings == FACTORY
 
 
 def test_touched_zones_round_trip_and_junk_dropped(tmp_path):

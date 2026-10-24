@@ -19,8 +19,8 @@ docs/specs/2026-10-24-overdrive-controls-design.md sections 3.3, 4 and 5.2.
 - A write refused with "Controller not found" (no controller attached) is not tried again for NOT_FOUND_RETRY seconds,
   so a missing controller is not searched for (every HID device listed) at every tick.
 - An error inside the loop is logged (once a minute at most), Gamepad is written and the loop goes on.
-- Every mode write that lands is followed, under the same lock, by the owner's changed button zones for that mode
-  (controls.apply_bindings: Desktop gets G-Helper's desktop defaults there, Gamepad the owner's set).
+- Every mode write that lands is followed, under the same lock, by the button zones for that mode
+  (controls.apply_bindings: the zones with a choice in either set plus the touched ones, from that mode's set).
 - stop() writes Gamepad, or Desktop when its optional mode callable (evaluated under the reapplier's lock, so a
   choice made while stop() waited is honoured) returns Desktop. It rewrites the button zones only when Desktop was
   the mode last written or is the one it writes (only then do the zones hold, or need, Desktop codes).

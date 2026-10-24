@@ -1,5 +1,7 @@
 import re
 
+import pytest
+
 from traction import bindings
 
 V2_FACTORY = {"gamepad": {}, "desktop": {}, "m1_secondary": True, "m2_secondary": True}
@@ -63,9 +65,11 @@ def test_primary_ignored_while_switch_on():
 
 def test_v1_conversion():
     b = bindings.clean({"back_right": "b", "combos": {"a": "screenshot"}})
-    assert b == {"gamepad": {"back_right": {"primary": "b"}, "a": {"secondary": "screenshot"}}, "desktop": {},
-                 "m1_secondary": False, "m2_secondary": True}
+    assert b == {"gamepad": {"back_right": {"primary": "b"}, "a": {"secondary": "screenshot"}},
+                 "desktop": {"back_right": {"primary": "b"}}, "m1_secondary": False, "m2_secondary": True}
     assert bindings.zone_slots(8, b, "gamepad") == ["02-8E", "02-8E", "01-02", "02-8F"]
+    # Ruling (T1 review 6): the shared switch is off, so the v1 action is M1's Primary in Desktop too (not dead)
+    assert bindings.zone_slots(8, b, "desktop") == ["02-8E", "02-8E", "01-02", "02-8F"]
     assert bindings.zone_slots(5, b, "gamepad") == ["01-01", "04-03-82-88-1B", "01-02", "00-00"]
 
 
@@ -75,6 +79,7 @@ def test_v1_shift_and_old_keys_only():
     b = bindings.clean({"back_left": "x"})
     assert b["m2_secondary"] is False and b["m1_secondary"] is True
     assert b["gamepad"] == {"back_left": {"primary": "x"}}
+    assert b["desktop"] == {"back_left": {"primary": "x"}}
 
 
 def test_v1_junk_dropped():
@@ -156,3 +161,30 @@ def test_keep_zones_takes_the_new_choices_only_in_those_zones():
     assert out2["desktop"] == {"b": {"primary": "esc"}, "du": {"primary": "a"}}
     assert out2["gamepad"] == {"du": {"secondary": "esc"}, "x": {"secondary": "win"}}
     assert out2["m1_secondary"] is False
+
+
+def test_switch_only_dict_is_v2():
+    b = bindings.clean({"m1_secondary": False})
+    assert b["m1_secondary"] is False and b["gamepad"] == {} and b["desktop"] == {}
+    assert bindings.clean({"m2_secondary": False})["m2_secondary"] is False
+
+
+def test_setters_ignore_non_string_ids():
+    for bad in (None, 5, ["a"], {"a": 1}):
+        assert bindings.set_choice({}, "gamepad", bad, "primary", "a") == V2_FACTORY
+        assert bindings.set_choice({}, bad, "a", "primary", "a") == V2_FACTORY
+        assert bindings.set_choice({}, "gamepad", "a", bad, "a") == V2_FACTORY
+        assert bindings.set_choice({}, "gamepad", "a", "primary", bad) == V2_FACTORY
+        assert bindings.set_back_secondary({}, bad, False) == V2_FACTORY
+        assert bindings.reset_button({}, "gamepad", bad) == V2_FACTORY
+        assert bindings.reset_button({}, bad, "a") == V2_FACTORY
+
+
+def test_zone_slots_unknown_set_raises():
+    for bad in ("auto", True, False, None):
+        with pytest.raises(ValueError):
+            bindings.zone_slots(5, {}, bad)
+
+
+def test_no_v1_shims():
+    assert not hasattr(bindings, "changed_zones")

@@ -27,7 +27,7 @@ class Settings:
         self.grip_vibration = True
         # False until the owner changes something: an untouched install only reads, it never writes the device.
         self.user_set = False
-        # The owner's button choices (bindings.clean shape); factory until changed.
+        # The owner's button choices (bindings.clean v2 shape: both sets and the back switches); factory until changed.
         self.bindings = binding_model.clean(None)
         # Zones Traction has written custom slots to and not yet written back to the Gamepad factory set: they are
         # rewritten (factory slots where the owner has no choice) until then.
@@ -72,12 +72,12 @@ class Settings:
             self.touched_zones = {z for z in zones if type(z) is int and z in valid}
 
     def to_dict(self) -> dict:
-        """Only the owner's binding choices are stored (a missing key means factory); no key at all when none."""
+        """Only the owner's binding choices are stored (a missing set or button means factory, a switch is stored only
+        when off); no bindings key at all when none."""
         out = {k: getattr(self, k) for k in FIELDS}
         b = binding_model.clean(self.bindings)
-        stored = {k: b[k] for k in binding_model.BACK if b[k] != "shift"}
-        if b["combos"]:
-            stored["combos"] = dict(b["combos"])
+        stored = {name: {bid: dict(e) for bid, e in b[name].items()} for name in binding_model.SETS if b[name]}
+        stored.update({sw: False for sw in ("m1_secondary", "m2_secondary") if not b[sw]})
         if stored:
             out["bindings"] = stored
         if self.touched_zones:
