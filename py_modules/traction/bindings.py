@@ -3,7 +3,9 @@
 A zone holds two buttons; its report carries four slots: first button, first button's combo, second button, second
 button's combo. Settings shape: {"back_left": <action id | "shift">, "back_right": <...>, "combos": {<button id>:
 <action id>}}; a missing key means the factory binding. "shift" is the factory code of the back button (02-8E left,
-02-8F right). Only the Gamepad mode uses the owner's set; Desktop gets G-Helper's desktop defaults.
+02-8F right). A back button set to an action gets it in its button slot only; its combo slot keeps the factory Shift
+code (the zone-8 report proven on the device: 02-8E, 02-8E, 01-02, 02-8F for the right one as B). Only the Gamepad mode
+uses the owner's set; Desktop gets G-Helper's desktop defaults.
 """
 
 # (id, label, code)
@@ -98,8 +100,7 @@ def _slots(bid: str, b: dict, desktop: bool) -> list:
         return [_DESKTOP.get(bid, base), combo]
     if bid in BACK:
         v = b[bid]
-        code = SHIFT[bid] if v == "shift" else _CODE[v]
-        return [code, code]
+        return [SHIFT[bid] if v == "shift" else _CODE[v], combo]   # the combo slot stays the factory Shift code
     c = b["combos"].get(bid)
     return [base, _CODE[c] if c is not None else combo]
 
@@ -128,3 +129,18 @@ def changed_zones(bindings: dict) -> list:
 def all_zones() -> list:
     """Every binding zone, 1 to 9."""
     return list(range(1, 10))
+
+
+def keep_zones(old: dict, new: dict, zones) -> dict:
+    """`new`'s choices for the buttons in `zones`, `old`'s for every other button (a write that landed only in some
+    zones: the stored set matches what the controller holds)."""
+    o, n = clean(old), clean(new)
+    zones = set(zones)
+    out = {"back_left": o["back_left"], "back_right": o["back_right"], "combos": {}}
+    for bid, _label, zone, _side in BUTTONS:
+        src = n if zone in zones else o
+        if bid in BACK:
+            out[bid] = src[bid]
+        elif bid in src["combos"]:
+            out["combos"][bid] = src["combos"][bid]
+    return out

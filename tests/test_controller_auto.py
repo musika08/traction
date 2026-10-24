@@ -480,7 +480,7 @@ def test_auto_switch_writes_the_bindings_for_that_mode(tmp_path):
         front(c, ["steam.exe"])
         for _ in range(3):
             await ca.run_once()
-        gamepad = [(5, ["01-01", "04-03-82-88-1B", "01-02", "00-00"]), (8, ["02-8E", "02-8E", "01-02", "01-02"])]
+        gamepad = [(5, ["01-01", "04-03-82-88-1B", "01-02", "00-00"]), (8, ["02-8E", "02-8E", "01-02", "02-8F"])]
         desktop = [(5, ["02-5A", "00-00", "02-76", "00-00"]), (8, ["02-8E", "02-8E", "02-8F", "02-8F"])]
         assert [x[0] for x in c.writes()] == ["set_controller_mode", "set_bindings", "set_bindings"]
         assert binding_writes(c) == gamepad
@@ -544,5 +544,30 @@ def test_auto_switch_reset_is_shown_in_the_reapplier_warning(tmp_path):
         assert ca.written_mode == "desktop"
         assert r.warning == RESET_MESSAGE
         assert r.settings.bindings["combos"] == {} and r.settings.touched_zones == set()
+        assert r.rerun is True                                # I3: the next tick rewrites mode and vibration
         await ca.stop()
+    run(go())
+
+
+def test_stop_writes_the_bindings_only_after_desktop(tmp_path):
+    # M1: only Desktop leaves Desktop codes in the zones; after Gamepad the zones already hold the owner's set.
+    async def go():
+        c, r, ca, _ = setup(tmp_path)
+        r.settings.bindings = dict(CHOSEN)
+        ca.start()
+        front(c, ["steam.exe"])
+        for _ in range(3):
+            await ca.run_once()
+        assert ca.written_mode == "gamepad"
+        c.calls.clear()
+        await ca.stop()                                       # the unload path: Gamepad after Gamepad
+        assert mode_writes(c) == ["gamepad"] and binding_writes(c) == []
+        c.calls.clear()
+        ca._written = None
+        await ca.stop()                                       # unknown: nothing assumed to hold Desktop codes
+        assert mode_writes(c) == ["gamepad"] and binding_writes(c) == []
+        c.calls.clear()
+        ca._written = "gamepad"
+        await ca.stop(lambda: "desktop")                      # Desktop chosen while stop() waited: desktop codes
+        assert mode_writes(c) == ["desktop"] and [z for z, _ in binding_writes(c)] == [5, 8]
     run(go())

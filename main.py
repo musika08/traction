@@ -253,15 +253,18 @@ class Plugin:
         self._check_overdrive_updated()
         state["blocked"] = UPDATE_NOTE if self._old else ""
         state["busy"] = self._busy()
+        # No read while a long service switch or a set_bindings call (pad polling, maybe the factory reset) runs: it
+        # would queue behind it, and two reads timing out in a row get the helper killed. The last reading is shown.
+        quiet = state["busy"] or controls.bindings_in_flight()
         replaced = False
         if self.armoury is not None:
             replaced = self.armoury.replaced()   # the shared record: either plugin may switch
-            if not state["busy"]:   # never queue behind a long service switch
+            if not quiet:
                 await self.armoury.check_installed()
             warning = " ".join(w for w in (self.armoury.warning, self._record_pending_note()) if w)
             state["armoury"] = {"installed": self.armoury.installed, "replaced": replaced, "warning": warning}
         state["note"] = "" if replaced else ARMOURY_RUNNING
-        if not state["busy"]:
+        if not quiet:
             controller, r = await controls.read_controller(self.client)
             touch = (self._controls or UNREAD)["touchscreen"]
             if not controls.transport_failure(r):
@@ -273,7 +276,7 @@ class Plugin:
             # and read again at the next poll.
             state["controller"]["found"] = bool(controller["found"])
             state["touchscreen"] = {"found": bool(touch["found"]), "enabled": bool(touch["enabled"])}
-        elif self._controls is not None:   # while busy, the last reading: a call would queue behind the switch
+        elif self._controls is not None:   # while quiet, the last reading: a call would queue behind the write
             state["controller"]["found"] = bool(self._controls["controller"]["found"])
             state["touchscreen"] = dict(self._controls["touchscreen"])
         state["unavailable"] = self.client.unavailable_reason or ""
@@ -316,6 +319,8 @@ class Plugin:
                 note = ""
                 if await self._controller_found():
                     r = await controls.apply_controller(self.client, s, mode)
+                    if r.get("reset"):
+                        self.reapplier.rerun = True   # the factory set wrote Gamepad and vibration 100
                     if not r.get("ok"):
                         result = _fail(str(r.get("message") or "The controller mode was not changed."))
                     else:
@@ -385,24 +390,37 @@ class Plugin:
     async def _change_buttons(self, change, zones) -> dict:
         """Under the reapplier's lock: builds the new bindings with `change(current)` from the bindings stored at
         that moment (a setter waiting for the lock never stores a stale set), writes `zones` for the live mode, then
-        stores them. Not stored when the write was refused (the pad not seen included: nothing was written). When
-        the pad went away after the write, the helper reset it to the factory set: the stored bindings and touched
-        zones are cleared."""
+        stores them. Not stored when the write was refused (the pad not seen included: nothing was written); when
+        only some zones landed (Reset buttons), only those zones' new choices are stored and the next reapply tick
+        writes the zones again. When the pad went away after the write, the helper reset it to the factory set: the
+        stored bindings and touched zones are cleared, and the next tick writes the mode and vibration again.
+        In Desktop mode nothing is written (the Desktop slots do not depend on the owner's choice): the choice is
+        stored and the zones marked touched, so the next Gamepad write puts them right."""
         s = self.settings
         async with self.reapplier.user_change():
             if self._busy():   # an Armoury switch may have begun while this waited for the lock
                 return _fail(BUSY)
+            old = bindings.clean(s.bindings)
             new = change(bindings.clean(s.bindings))
             note = ""
-            if await self._controller_found():
+            if self._live_mode() == "desktop":
+                s.touched_zones |= set(zones)
+            elif await self._controller_found():
                 mode = self._live_mode()
                 r = await controls.write_zones(self.client, new, mode, zones, decky.logger)
                 if r.get("reset"):
                     controls.forget_bindings(s)
+                    self.reapplier.rerun = True   # the factory set wrote Gamepad and vibration 100
                     return _fail(" ".join(m for m in (str(r.get("message") or ""), self._save()) if m))
-                touched = controls.note_written(s, new, mode, r.get("written") or [])
+                written = r.get("written") or []
+                touched = controls.note_written(s, new, mode, written, r.get("uncertain"))
                 if not r.get("ok"):
-                    if touched:
+                    if r.get("uncertain") is not None:
+                        s.user_set = True   # the zone may hold the new slots: reapplies must put it right
+                    if written:   # some zones landed: store just those, and write the rest again next tick
+                        s.bindings = bindings.keep_zones(old, new, written)
+                        self.reapplier.rerun = True
+                    if touched or written or r.get("uncertain") is not None:
                         self._save()
                     return _fail(str(r.get("message") or "The buttons were not changed."))
             else:
@@ -446,8 +464,9 @@ class Plugin:
         return await self._change_buttons(change, [COMBO_ZONES[button]])
 
     async def reset_buttons(self) -> dict:
-        """Writes all 9 zones with the factory set for the live mode, then clears the stored bindings (touched zones
-        leave as their Gamepad factory write lands)."""
+        """Writes all 9 zones with the Gamepad factory set, then clears the stored bindings (touched zones leave as
+        their factory write lands). In Desktop mode: cleared, all 9 zones marked touched, nothing written. A single
+        press, no confirmation (owner rule)."""
         refused = self._refuse_controller()
         if refused:
             return refused

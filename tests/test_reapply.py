@@ -252,3 +252,21 @@ def test_reapply_warns_when_the_pad_is_not_seen_or_reset(tmp_path):
         assert [x[0] for x in c.writes()] == ["set_controller_mode", "set_vibration"]
         assert r.warning == ""
     run(go())
+
+
+def test_reapply_reset_reply_reruns_with_the_owners_vibration(tmp_path):
+    # I3: the factory set wrote vibration 100; the next tick writes the owner's 0 (and nothing custom).
+    async def go():
+        c = _controller_client()
+        c.bindings_reply = "reset"
+        s = make(tmp_path, bindings=dict(CHOSEN), grip_vibration=False)
+        r = Reapplier(c, s, clock=Clock(), power_source=Power())
+        assert await r.apply_all() is True
+        assert r.rerun is True
+        c.calls.clear()
+        c.bindings_reply = "ok"
+        assert await r.tick() is True
+        assert ("set_vibration", {"strength": 0}) in c.writes()
+        assert [x for x in c.writes() if x[0] == "set_bindings"] == []
+        assert r.rerun is False
+    run(go())

@@ -1046,7 +1046,7 @@ def test_set_back_button_writes_zone_8_and_saves(tmp_path):
         r = await wait(p.set_back_button("right", "b"))
         assert r == {"ok": True, "message": ""}, r
         assert p.reapplier.generation == gen + 1                       # a user change, under the shared lock
-        assert binding_writes(c) == [(8, ["02-8E", "02-8E", "01-02", "01-02"])]
+        assert binding_writes(c) == [(8, ["02-8E", "02-8E", "01-02", "02-8F"])]   # I1: the proven report
         assert [x[0] for x in c.writes()] == ["set_bindings"]          # only the affected zone, nothing else
         assert c.timeouts["set_bindings"] == [20.0]
         saved = Settings.load(s.path)
@@ -1084,14 +1084,17 @@ def test_button_writes_follow_the_live_mode(tmp_path):
     async def go():
         p, c, s = plugin_with(tmp_path, controller_mode="desktop")
         controller_found(c)
-        assert (await wait(p.set_combo("a", "screenshot")))["ok"]
-        assert binding_writes(c) == [(5, ["02-5A", "00-00", "02-76", "00-00"])]   # Desktop: desktop defaults
-        c.calls.clear()
+        # I2a: Desktop slots do not depend on the owner's choice: stored and the zone marked touched, no write
+        assert (await wait(p.set_combo("a", "screenshot"))) == {"ok": True, "message": ""}
+        assert c.calls == []
+        assert s.touched_zones == {5} and Settings.load(s.path).bindings["combos"] == {"a": "screenshot"}
         s.controller_mode = "auto"
         p.controller_auto._written = "desktop"                         # Auto has Desktop on the pad now
         assert (await wait(p.set_combo("b", "esc")))["ok"]
-        assert binding_writes(c) == [(5, ["02-5A", "00-00", "02-76", "00-00"])]
-        c.calls.clear()
+        assert c.calls == [] and s.bindings["combos"] == {"a": "screenshot", "b": "esc"}
+        assert (await wait(p.set_back_button("right", "b")))["ok"]
+        assert c.calls == [] and s.touched_zones == {5, 8}
+        s.bindings["back_right"] = "shift"
         p.controller_auto._written = "gamepad"
         assert (await wait(p.set_combo("b", "esc")))["ok"]
         assert binding_writes(c) == [(5, ["01-01", "04-03-82-88-1B", "01-02", "02-76"])]
@@ -1109,8 +1112,16 @@ def test_reset_buttons_writes_all_zones_then_clears(tmp_path):
         assert s.bindings == FACTORY and Settings.load(s.path).bindings == FACTORY
         c.calls.clear()
         s.controller_mode = "desktop"
-        assert (await wait(p.reset_buttons()))["ok"]
-        assert binding_writes(c)[4] == (5, ["02-5A", "00-00", "02-76", "00-00"])   # factory for the current mode
+        s.bindings = {"back_left": "a", "back_right": "shift", "combos": {"x": "esc"}}
+        assert (await wait(p.reset_buttons())) == {"ok": True, "message": ""}
+        assert c.calls == []                                             # I2a: no write in Desktop
+        assert s.bindings == FACTORY and s.touched_zones == set(range(1, 10))
+        saved = Settings.load(s.path)
+        assert saved.bindings == FACTORY and saved.touched_zones == set(range(1, 10))
+        c.calls.clear()
+        assert (await wait(p.set_controller_mode("gamepad")))["ok"]     # back to Gamepad: all 9 factory zones
+        assert [z for z, _ in binding_writes(c)] == list(range(1, 10))
+        assert s.touched_zones == set()
     run(go())
 
 
@@ -1340,7 +1351,11 @@ def test_reset_buttons_partial_keeps_unwritten_zones_touched(tmp_path):
         assert (await wait(p.reset_buttons())) == {"ok": False, "message": PAD_NOT_SEEN}
         assert [z for z, _ in binding_writes(c)] == [1, 2, 3]
         assert s.touched_zones == {5}                               # zone 1 got its factory slots
-        assert s.bindings["combos"] == {"du": "esc", "a": "tab"}   # the reset did not finish: choices kept
+        # M3: only the zones that landed are stored (zone 1's choice is gone from the pad), and the next tick
+        # writes the rest again
+        assert s.bindings["combos"] == {"a": "tab"}
+        assert Settings.load(s.path).bindings["combos"] == {"a": "tab"}
+        assert p.reapplier.rerun is True
     run(go())
 
 
@@ -1356,4 +1371,91 @@ def test_reset_reply_reports_a_failed_save(tmp_path):
         r = await wait(p.set_combo("x", "esc"))
         assert r["ok"] is False and r["message"].startswith(RESET_MESSAGE) and "disk full" in r["message"]
         assert s.bindings == FACTORY
+    run(go())
+
+
+# ---------- buttons: final review fixes ----------
+
+def test_reset_reply_reruns_the_mode_and_vibration_next_tick(tmp_path):
+    # I3: the helper's factory set wrote Gamepad and vibration 100; the next tick writes the owner's again.
+    async def go():
+        p, c, s = plugin_with(tmp_path, grip_vibration=False, user_set=True,
+                              bindings={"back_left": "a", "back_right": "shift", "combos": {}})
+        controller_found(c)
+        c.bindings_reply = "reset"
+        assert (await wait(p.set_combo("x", "esc"))) == {"ok": False, "message": RESET_MESSAGE}
+        assert p.reapplier.rerun is True
+        c.calls.clear()
+        c.bindings_reply = "ok"
+        assert await wait(p.reapplier.tick())
+        assert ("set_vibration", {"strength": 0}) in c.writes()
+        assert binding_writes(c) == []                                 # nothing custom is left
+        assert p.reapplier.rerun is False
+    run(go())
+
+
+def test_mode_change_reset_reply_reruns_next_tick(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, grip_vibration=False, user_set=True,
+                              bindings={"back_left": "a", "back_right": "shift", "combos": {}})
+        controller_found(c)
+        c.bindings_reply = "reset"
+        r = await wait(p.set_controller_mode("gamepad"))
+        assert r == {"ok": True, "message": RESET_MESSAGE}
+        assert p.reapplier.rerun is True
+        c.calls.clear()
+        c.bindings_reply = "ok"
+        assert await wait(p.reapplier.tick())
+        assert ("set_vibration", {"strength": 0}) in c.writes()
+    run(go())
+
+
+def test_reset_buttons_reset_reply_reruns(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, bindings={"back_left": "a", "back_right": "shift", "combos": {}})
+        controller_found(c)
+        c.bindings_reply = "reset"
+        assert (await wait(p.reset_buttons()))["ok"] is False
+        assert p.reapplier.rerun is True and s.bindings == FACTORY and s.touched_zones == set()
+    run(go())
+
+
+def test_transport_failure_in_a_setter_marks_the_zone_touched(tmp_path):
+    # M7: the combo may have landed though the reply was lost: the zone is put right at the next reapply.
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        controller_found(c)
+        c.handlers["set_bindings"] = reply(fail("Traction helper restarted, try again"))
+        r = await wait(p.set_combo("a", "esc"))
+        assert r["ok"] is False
+        assert s.bindings == FACTORY                                  # not stored
+        assert s.touched_zones == {5} and Settings.load(s.path).touched_zones == {5}
+        c.handlers.pop("set_bindings")
+        c.calls.clear()
+        await wait(p.reapplier.apply_all())
+        assert binding_writes(c) == [(5, Z5_FACTORY)]
+        assert s.touched_zones == set()
+    run(go())
+
+
+def test_get_state_does_not_read_while_a_binding_write_runs(tmp_path):
+    # M2: a read queued behind set_bindings could time out twice and get the helper killed mid-reset.
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        controller_found(c)
+        first = await wait(p.get_state())
+        assert first["controller"]["found"] is True
+        entered, release = held_bindings(c, ["ok"])
+        setter = asyncio.ensure_future(p.set_combo("a", "esc"))
+        await wait(entered.wait())
+        c.calls.clear()
+        state = await wait(p.get_state())
+        assert [x for x in c.calls if x[0] in ("controller_info", "get_touchscreen", "armoury_state")] == []
+        assert state["controller"]["found"] is True                  # the last reading
+        assert state["touchscreen"] == first["touchscreen"]
+        release.set()
+        assert (await wait(setter))["ok"]
+        c.calls.clear()
+        await wait(p.get_state())
+        assert any(x[0] == "controller_info" for x in c.calls)       # read again once the write is done
     run(go())

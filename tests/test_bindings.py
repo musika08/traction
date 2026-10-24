@@ -9,7 +9,11 @@ def test_factory_zone5():
 
 def test_back_right_b():
     b = {"back_right": "b"}
-    assert bindings.zone_slots(8, b, False) == ["02-8E", "02-8E", "01-02", "01-02"]
+    # I1: the back button's combo slot keeps its factory (Shift) code, the report proven on the device:
+    # 02 00 8E | 02 00 8E | 01 02 | 02 00 8F
+    assert bindings.zone_slots(8, b, False) == ["02-8E", "02-8E", "01-02", "02-8F"]
+    assert bindings.zone_slots(8, {"back_left": "a", "back_right": "x"}, False) == ["01-01", "02-8E", "01-03",
+                                                                                   "02-8F"]
     assert bindings.changed_zones(b) == [8]
 
 
@@ -54,3 +58,13 @@ def test_actions_unique_and_codes_valid():
     rx = re.compile(r"^(00-00|0[1235]-[0-9A-F]{2}|04-0[1-5](-[0-9A-F]{2})+)$")
     for _id, _label, code in bindings.ACTIONS:
         assert rx.match(code), code
+
+
+def test_keep_zones_takes_the_new_choices_only_in_those_zones():
+    old = {"back_left": "a", "back_right": "shift", "combos": {"du": "esc", "a": "tab", "x": "win"}}
+    new = bindings.clean(None)
+    assert bindings.keep_zones(old, new, [1, 8]) == {"back_left": "shift", "back_right": "shift",
+                                                     "combos": {"a": "tab", "x": "win"}}
+    assert bindings.keep_zones(old, new, []) == bindings.clean(old)
+    assert bindings.keep_zones(old, {"combos": {"b": "esc"}}, [5]) == {"back_left": "a", "back_right": "shift",
+                                                                      "combos": {"du": "esc", "b": "esc", "x": "win"}}

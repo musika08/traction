@@ -27,6 +27,7 @@ BINDINGS_TIMEOUT = 20.0
 clock = time.monotonic          # tests replace it
 _touch = {"at": None, "value": None, "want": None, "until": None}
 _bindings_logged: set = set()   # binding-write failures already logged (once per kind until a write lands)
+_bindings_calls = [0]           # set_bindings calls in flight (get_state reads nothing meanwhile)
 
 # A reply that failed on the way (helper restarted, did not answer, not running), not a device refusal.
 transport_failure = is_transport_failure
@@ -35,6 +36,12 @@ transport_failure = is_transport_failure
 def reset_cache() -> None:
     _touch.update(at=None, value=None, want=None, until=None)
     _bindings_logged.clear()
+
+
+def bindings_in_flight() -> bool:
+    """True while a set_bindings call runs: a read sent now would queue behind its pad polling and factory reset, and
+    two timed-out reads in a row get the helper killed (mid-reset). get_state shows the last reading instead."""
+    return _bindings_calls[0] > 0
 
 
 def _result(ok: bool, message: str = "", **extra) -> dict:
@@ -93,18 +100,27 @@ async def set_touchscreen(client, enabled: bool) -> dict:
     return _result(True, "", enabled=bool(enabled))
 
 
-async def write_zones(client, chosen: dict, mode: str, zones, logger: Optional[logging.Logger] = None) -> dict:
+async def write_zones(client, chosen: dict, mode: str, zones, logger: Optional[logging.Logger] = None,
+                      watch: bool = True) -> dict:
     """Writes each zone's four slots for `mode` ("desktop" gets G-Helper's desktop defaults, gamepad/auto the owner's
     set). Stops at the first failure; `written` lists the zones that landed. `reset` is True when the pad went away
     after a write (the helper then wrote the factory set, or tried to: data.reset true or false); a refusal before
-    the write ("Windows does not see the gamepad", data null) is not a reset: nothing was written. Each kind of
-    failure is logged once until a write lands."""
+    the write ("Windows does not see the gamepad", data null) is not a reset: nothing was written. `uncertain` is the
+    zone whose reply failed on the way (it may have landed), else None. watch False asks the helper for no pad check,
+    no polling and no factory reset (Desktop mode hides the XInput pad). Each kind of failure is logged once until a
+    write lands."""
     desktop = mode == "desktop"
     log = logger or logging.getLogger("traction")
     written = []
     for zone in zones:
-        r = await client.call("set_bindings", {"zone": zone, "slots": bindings.zone_slots(zone, chosen, desktop)},
-                              timeout=BINDINGS_TIMEOUT)
+        args = {"zone": zone, "slots": bindings.zone_slots(zone, chosen, desktop)}
+        if not watch:
+            args["watch"] = False
+        _bindings_calls[0] += 1
+        try:
+            r = await client.call("set_bindings", args, timeout=BINDINGS_TIMEOUT)
+        finally:
+            _bindings_calls[0] -= 1
         if r.get("ok"):
             written.append(zone)
             continue
@@ -114,16 +130,19 @@ async def write_zones(client, chosen: dict, mode: str, zones, logger: Optional[l
         if message not in _bindings_logged:
             _bindings_logged.add(message)
             log.warning(f"Button bindings: zone {zone} not written: {message}")
-        return _result(False, message, reset=reset, transport=transport_failure(r), written=written)
+        transport = transport_failure(r)
+        return _result(False, message, reset=reset, transport=transport, written=written,
+                       uncertain=zone if transport else None)
     if zones:
         _bindings_logged.clear()
-    return _result(True, "", reset=False, transport=False, written=written)
+    return _result(True, "", reset=False, transport=False, written=written, uncertain=None)
 
 
-def note_written(settings: Settings, chosen: dict, mode: str, written) -> bool:
+def note_written(settings: Settings, chosen: dict, mode: str, written, uncertain: Optional[int] = None) -> bool:
     """Updates settings.touched_zones after zones were written from `chosen` for `mode`: a zone with an owner choice
     is touched; one without leaves only after a Gamepad (non-desktop) factory write, since desktop slots are not the
-    Gamepad factory set. True when the set changed (the caller saves)."""
+    Gamepad factory set. The `uncertain` zone (its reply failed on the way, so it may hold what was sent) is touched,
+    so a later write puts it right. True when the set changed (the caller saves)."""
     changed = set(bindings.changed_zones(chosen))
     before = set(settings.touched_zones)
     for zone in written:
@@ -131,6 +150,8 @@ def note_written(settings: Settings, chosen: dict, mode: str, written) -> bool:
             settings.touched_zones.add(zone)
         elif mode != "desktop":
             settings.touched_zones.discard(zone)
+    if uncertain is not None:
+        settings.touched_zones.add(uncertain)
     return settings.touched_zones != before
 
 
@@ -142,18 +163,19 @@ def forget_bindings(settings: Settings) -> None:
 
 async def apply_bindings(client, settings: Settings, mode: str, logger: Optional[logging.Logger] = None) -> dict:
     """Writes the zones the owner changed plus the touched ones (factory slots where the owner has no choice now),
-    for `mode`. When the pad went away after a write (the helper reset it to the factory set) the stored bindings and
-    touched zones are cleared and saved, so no later reapply writes them again."""
+    for `mode`; Desktop writes are not watched (the pad is hidden in Desktop mode). When the pad went away after a
+    write (the helper reset it to the factory set) the stored bindings and touched zones are cleared and saved, so no
+    later reapply writes them again; the caller then has the mode and vibration rewritten (`reset` True)."""
     zones = sorted(set(bindings.changed_zones(settings.bindings)) | set(settings.touched_zones))
     if not zones:
-        return _result(True, "", reset=False, transport=False, written=[])
+        return _result(True, "", reset=False, transport=False, written=[], uncertain=None)
     chosen = bindings.clean(settings.bindings)
-    r = await write_zones(client, chosen, mode, zones, logger)
+    r = await write_zones(client, chosen, mode, zones, logger, watch=mode != "desktop")
     if r["reset"]:
         forget_bindings(settings)
         save = True
     else:
-        save = note_written(settings, chosen, mode, r["written"])
+        save = note_written(settings, chosen, mode, r["written"], r["uncertain"])
     if save:
         try:
             settings.save()
@@ -167,25 +189,28 @@ async def apply_controller(client, settings: Settings, mode: Optional[str] = Non
     """Writes the controller mode ("auto" starts in Gamepad), right after it the changed button zones for that mode,
     then the grip vibration. Every failure is reported. A failed bindings write (pad not seen, pad reset) does not
     fail the mode: its message is in `warning`. The bindings are skipped when the mode write failed (desktop slots
-    must not land on a pad left in Gamepad, nor the other way round)."""
+    must not land on a pad left in Gamepad, nor the other way round). `reset` is True when the helper wrote the
+    factory set (Gamepad, vibration 100): the caller has the next reapply tick write the mode and vibration again."""
     mode = mode or settings.controller_mode
     if mode not in CONTROLLER_MODES:
-        return _result(False, "Unknown controller mode.")
+        return _result(False, "Unknown controller mode.", reset=False)
     problems = []
     warning = ""
+    reset = False
     r = await client.call("set_controller_mode", {"mode": "desktop" if mode == "desktop" else "gamepad"})
     if not r.get("ok"):
         problems.append(_msg(r, "The controller mode was not applied."))
         if transport_failure(r):   # the helper is gone: the vibration write would only fail the same way
-            return _result(False, " ".join(problems), mode=mode, warning="")
+            return _result(False, " ".join(problems), mode=mode, warning="", reset=False)
     else:
         b = await apply_bindings(client, settings, mode, logger)
+        reset = bool(b["reset"])
         if b["transport"]:
             problems.append(b["message"])
-            return _result(False, " ".join(problems), mode=mode, warning="")
+            return _result(False, " ".join(problems), mode=mode, warning="", reset=reset)
         if not b["ok"]:
             warning = b["message"]
     r = await client.call("set_vibration", {"strength": 100 if settings.grip_vibration else 0})
     if not r.get("ok"):
         problems.append(_msg(r, "The grip vibration was not applied."))
-    return _result(not problems, " ".join(problems), mode=mode, warning=warning)
+    return _result(not problems, " ".join(problems), mode=mode, warning=warning, reset=reset)

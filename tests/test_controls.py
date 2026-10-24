@@ -208,7 +208,7 @@ CHOSEN = {"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}
 FACTORY = {"back_left": "shift", "back_right": "shift", "combos": {}}
 Z5_GAMEPAD = ["01-01", "04-03-82-88-1B", "01-02", "00-00"]
 Z5_DESKTOP = ["02-5A", "00-00", "02-76", "00-00"]
-Z8_GAMEPAD = ["02-8E", "02-8E", "01-02", "01-02"]
+Z8_GAMEPAD = ["02-8E", "02-8E", "01-02", "02-8F"]
 Z8_DESKTOP = ["02-8E", "02-8E", "02-8F", "02-8F"]
 
 
@@ -319,4 +319,76 @@ def test_touched_zones_follow_the_writes(tmp_path):
         c.bindings_reply = "reset_failed"
         await controls.apply_bindings(c, s, "gamepad")
         assert s.touched_zones == set() and s.bindings == FACTORY
+    run(go())
+
+
+# ---------- final review fixes ----------
+
+def binding_args(c):
+    return [a for cmd, a in c.calls if cmd == "set_bindings"]
+
+
+def test_desktop_writes_without_the_pad_watch(tmp_path):
+    # I2b: Desktop mode hides the XInput pad, so its writes ask for no pad check, polling or factory reset.
+    async def go():
+        c = FakeClient()
+        s = settings(tmp_path, bindings=dict(CHOSEN))
+        await controls.apply_bindings(c, s, "desktop")
+        assert [a.get("watch") for a in binding_args(c)] == [False, False]
+        c.calls.clear()
+        for mode in ("gamepad", "auto"):
+            await controls.apply_bindings(c, s, mode)
+        assert all(set(a) == {"zone", "slots"} for a in binding_args(c))   # watched (the helper's default)
+    run(go())
+
+
+def test_apply_controller_reports_a_reset(tmp_path):
+    async def go():
+        c = FakeClient()
+        s = settings(tmp_path, bindings=dict(CHOSEN))
+        r = await controls.apply_controller(c, s, "gamepad")
+        assert r["reset"] is False
+        c.bindings_reply = "reset"
+        s.bindings = dict(CHOSEN)
+        r = await controls.apply_controller(c, s, "gamepad")
+        assert r["ok"] and r["reset"] is True
+    run(go())
+
+
+def test_transport_failure_marks_the_zone_touched(tmp_path):
+    # M7: a write cut off on the way may have landed: the zone is rewritten later.
+    async def go():
+        c = FakeClient()
+        c.handlers["set_bindings"] = handler(fail(RESTARTED))
+        s = settings(tmp_path, bindings={"back_left": "shift", "back_right": "shift", "combos": {"a": "tab"}})
+        r = await controls.apply_bindings(c, s, "desktop")
+        assert not r["ok"] and r["transport"] and r["uncertain"] == 5
+        assert s.touched_zones == {5} and Settings.load(s.path).touched_zones == {5}
+        r = await controls.write_zones(c, CHOSEN, "gamepad", [5])
+        assert r["uncertain"] == 5
+        c.handlers["set_bindings"] = handler(fail("refused"))
+        r = await controls.write_zones(c, CHOSEN, "gamepad", [5])
+        assert r["uncertain"] is None                          # a device refusal: nothing landed
+    run(go())
+
+
+def test_bindings_in_flight_counts_the_calls(tmp_path):
+    async def go():
+        c = FakeClient()
+        seen = []
+
+        async def h(args):
+            seen.append(controls.bindings_in_flight())
+            return ok({"zone": args["zone"]})
+        c.handlers["set_bindings"] = h
+        assert not controls.bindings_in_flight()
+        await controls.write_zones(c, CHOSEN, "gamepad", [5, 8])
+        assert seen == [True, True] and not controls.bindings_in_flight()
+
+        async def boom(args):
+            raise RuntimeError("x")
+        c.handlers["set_bindings"] = boom
+        with pytest.raises(RuntimeError):
+            await controls.write_zones(c, CHOSEN, "gamepad", [5])
+        assert not controls.bindings_in_flight()
     run(go())

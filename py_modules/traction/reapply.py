@@ -44,6 +44,19 @@ class Reapplier(ReapplierCore):
         self.settings = settings
         # main.py: True while an Overdrive older than 0.2.0 drives the controller (nothing is written then)
         self.blocked: Optional[Callable[[], bool]] = None
+        self._reset_seen = False   # a reapply's bindings write ended in the helper's factory reset
+
+    async def apply_all(self) -> bool:
+        """ReapplierCore.apply_all; after a factory reset by the helper (it wrote Gamepad and vibration 100) the next
+        tick reapplies once more, which writes the stored mode and vibration and nothing custom (the bindings are
+        cleared by then). Set after the core's own rerun bookkeeping, which would clear it."""
+        self._reset_seen = False
+        try:
+            return await super().apply_all()
+        finally:
+            if self._reset_seen:
+                self._reset_seen = False
+                self.rerun = True
 
     def _blocked(self) -> bool:
         return bool(self.blocked is not None and self.blocked())
@@ -65,6 +78,8 @@ class Reapplier(ReapplierCore):
             step_client = _TimedStepClient(self, gen)
             r = await apply_controller(step_client, self.settings, logger=self.log)
             transport |= step_client.transport
+            if r.get("reset"):
+                self._reset_seen = True
             if r.get("ok"):
                 written = True
                 if r.get("warning"):   # the buttons were not written (pad not seen) or were reset

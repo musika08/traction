@@ -22,7 +22,10 @@ docs/specs/2026-10-24-overdrive-controls-design.md sections 3.3, 4 and 5.2.
 - Every mode write that lands is followed, under the same lock, by the owner's changed button zones for that mode
   (controls.apply_bindings: Desktop gets G-Helper's desktop defaults there, Gamepad the owner's set).
 - stop() writes Gamepad, or Desktop when its optional mode callable (evaluated under the reapplier's lock, so a
-  choice made while stop() waited is honoured) returns Desktop.
+  choice made while stop() waited is honoured) returns Desktop. It rewrites the button zones only when Desktop was
+  the mode last written or is the one it writes (only then do the zones hold, or need, Desktop codes).
+- A factory reset by the helper during a bindings write sets reapplier.rerun: the next tick writes the stored mode and
+  vibration again (the factory set wrote Gamepad and vibration 100).
 """
 import asyncio
 import logging
@@ -101,7 +104,9 @@ class ControllerAuto:
         async with self.reapplier.lock:
             m = DESKTOP if (mode is not None and mode() == DESKTOP) else GAMEPAD
             r = await self.client.call("set_controller_mode", {"mode": m})
-            if r.get("ok"):
+            # The zones hold Desktop codes only after a Desktop write (or need them for one): only then are they
+            # rewritten. At unload (Gamepad after Gamepad) nothing but the mode is written.
+            if r.get("ok") and DESKTOP in (m, self._written):
                 await self._write_bindings(m)
         mode = m
         if not r.get("ok"):
@@ -197,15 +202,18 @@ class ControllerAuto:
     async def _write_bindings(self, mode: str) -> None:
         """The changed button zones for the mode just written (called under the reapplier's lock). A failure is
         logged by apply_bindings (once per kind); the mode stays written. A factory reset by the helper (the pad went
-        away) is shown with the reapplier's warning."""
+        away) is shown with the reapplier's warning, and the next reapply tick writes the mode and vibration again
+        (the factory set wrote Gamepad and vibration 100)."""
         rp = self.reapplier
         settings = getattr(rp, "settings", None)
         blocked = getattr(rp, "_blocked", None)
         if settings is None or (blocked is not None and blocked()):
             return
         b = await apply_bindings(self.client, settings, mode, self.log)
-        if b.get("reset") and b.get("message"):
-            rp.warning = " ".join(w for w in (rp.warning, b["message"]) if w)
+        if b.get("reset"):
+            rp.rerun = True
+            if b.get("message"):
+                rp.warning = " ".join(w for w in (rp.warning, b["message"]) if w)
 
     # ---------- loop ----------
 
