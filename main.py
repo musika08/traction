@@ -11,7 +11,7 @@ _PY_MODULES = os.path.join(PLUGIN_DIR, "py_modules")
 if _PY_MODULES not in sys.path:
     sys.path.append(_PY_MODULES)
 
-from traction import controls, device  # noqa: E402
+from traction import bindings, controls, device  # noqa: E402
 from traction.armoury_record import RECORD_DIR, ArmouryLocked, ArmouryRecord  # noqa: E402
 from traction.armoury_switch import ArmourySwitch, migrate_from_settings  # noqa: E402
 from traction.controller_auto import ControllerAuto  # noqa: E402
@@ -33,6 +33,9 @@ MOVE_FAILED = ("Overdrive's Armoury Crate record could not be moved to the share
                "moment.")
 OVERDRIVE_POLL = 5.0             # seconds between checks of an old Overdrive's version
 MOVE_WAIT = 2.0                  # how long a move of Overdrive's orphaned record waits for the record lock
+ACTION_IDS = frozenset(a[0] for a in bindings.ACTIONS)
+COMBO_ZONES = {b[0]: b[2] for b in bindings.BUTTONS if b[0] not in bindings.BACK}
+BACK_ZONE = 8
 UNREAD = {"controller": {"found": False}, "touchscreen": {"found": False, "enabled": False}}
 
 
@@ -72,6 +75,13 @@ def record_dir() -> str:
 
 def _fail(message: str) -> dict:
     return {"ok": False, "message": message}
+
+
+def _buttons(chosen) -> dict:
+    """get_state's buttons: the back buttons, the combos and how many combos are changed."""
+    b = bindings.clean(chosen)
+    return {"back_left": b["back_left"], "back_right": b["back_right"], "combos": dict(b["combos"]),
+            "changed": len(b["combos"])}
 
 
 class Plugin:
@@ -235,6 +245,7 @@ class Plugin:
             "controller": {"mode": s.controller_mode, "found": False},
             "vibration": bool(s.grip_vibration),
             "touchscreen": dict(UNREAD["touchscreen"]),
+            "buttons": _buttons(s.bindings),
             "blocked": "", "note": "", "busy": False, "warning": "", "unavailable": "",
         }
         if self.client is None:
@@ -307,6 +318,8 @@ class Plugin:
                     r = await controls.apply_controller(self.client, s, mode)
                     if not r.get("ok"):
                         result = _fail(str(r.get("message") or "The controller mode was not changed."))
+                    else:
+                        note = str(r.get("warning") or "")   # the buttons were not written, or were reset
                 else:
                     note = NO_CONTROLLER
                 if result is None:
@@ -357,6 +370,77 @@ class Plugin:
                 return _fail(BUSY)
             r = await controls.set_touchscreen(self.client, enabled)
         return {"ok": bool(r.get("ok")), "message": str(r.get("message") or "")}
+
+    # ---------- buttons ----------
+
+    def _live_mode(self) -> str:
+        """The mode on the pad now: the stored one, or under Auto the one the loop last wrote (Gamepad until it
+        has written Desktop)."""
+        mode = self.settings.controller_mode
+        if mode == "auto":
+            ca = self.controller_auto
+            return "desktop" if ca is not None and getattr(ca, "_written", None) == "desktop" else "gamepad"
+        return mode
+
+    async def _change_buttons(self, new: dict, zones) -> dict:
+        """Writes `zones` from the bindings `new` for the live mode, then stores `new`. Not stored when the write was
+        refused (the pad not seen included: nothing was written). When the pad went away after the write, the helper
+        reset it to the factory set: the stored bindings are cleared."""
+        s = self.settings
+        async with self.reapplier.user_change():
+            if self._busy():   # an Armoury switch may have begun while this waited for the lock
+                return _fail(BUSY)
+            note = ""
+            if await self._controller_found():
+                r = await controls.write_zones(self.client, new, self._live_mode(), zones, decky.logger)
+                if r.get("reset"):
+                    s.bindings = bindings.clean(None)
+                    self._save()
+                    return _fail(str(r.get("message")))
+                if not r.get("ok"):
+                    return _fail(str(r.get("message") or "The buttons were not changed."))
+            else:
+                note = NO_CONTROLLER
+            s.bindings = bindings.clean(new)
+            s.user_set = True   # reapplied with the controller mode after sleep
+            return {"ok": True, "message": " ".join(m for m in (note, self._save()) if m)}
+
+    async def set_back_button(self, side, value) -> dict:
+        """A back button as Shift (the combos' modifier, "shift") or as one action. Writes zone 8 only."""
+        refused = self._refuse_controller()
+        if refused:
+            return refused
+        if side not in ("left", "right"):
+            return _fail("Expected the left or right back button.")
+        if not isinstance(value, str) or (value != "shift" and value not in ACTION_IDS):
+            return _fail("Unknown button action.")
+        new = bindings.clean(self.settings.bindings)
+        new["back_" + side] = value
+        return await self._change_buttons(new, [BACK_ZONE])
+
+    async def set_combo(self, button, action) -> dict:
+        """What Shift + `button` does; "unchanged" removes the choice (the zone is written with the factory combo).
+        Writes that button's zone only."""
+        refused = self._refuse_controller()
+        if refused:
+            return refused
+        if not isinstance(button, str) or button not in COMBO_ZONES:
+            return _fail("Unknown button.")
+        if not isinstance(action, str) or (action != "unchanged" and action not in ACTION_IDS):
+            return _fail("Unknown button action.")
+        new = bindings.clean(self.settings.bindings)
+        if action == "unchanged":
+            new["combos"].pop(button, None)
+        else:
+            new["combos"][button] = action
+        return await self._change_buttons(new, [COMBO_ZONES[button]])
+
+    async def reset_buttons(self) -> dict:
+        """Writes all 9 zones with the factory set for the live mode, then clears the stored bindings."""
+        refused = self._refuse_controller()
+        if refused:
+            return refused
+        return await self._change_buttons(bindings.clean(None), bindings.all_zones())
 
     # ---------- Armoury Crate ----------
     # The switch, the record and its rules are ArmourySwitch's (armoury_switch.py, shared with Overdrive).

@@ -8,11 +8,12 @@ settings_file.py's. Touch Screen is not stored: it is read from Windows.
 import os
 from typing import Optional
 
+from . import bindings as binding_model
 from . import settings_file
 
 OWNER = "Traction"
 CONTROLLER_MODES = ("gamepad", "desktop", "auto")
-FIELDS = ("controller_mode", "grip_vibration", "user_set")
+FIELDS = ("controller_mode", "grip_vibration", "user_set")   # bindings is saved too (compact, see to_dict)
 
 
 def _mode(v) -> Optional[str]:
@@ -26,6 +27,8 @@ class Settings:
         self.grip_vibration = True
         # False until the owner changes something: an untouched install only reads, it never writes the device.
         self.user_set = False
+        # The owner's button choices (bindings.clean shape); factory until changed.
+        self.bindings = binding_model.clean(None)
         self.logger = None
         self._reset_note = ""               # why the file was reset (shown in get_state)
         self._unreadable_pending = False    # the unreadable file is still on disk with no copy kept yet
@@ -59,9 +62,18 @@ class Settings:
             self.grip_vibration = raw["grip_vibration"]
         if isinstance(raw.get("user_set"), bool):
             self.user_set = raw["user_set"]
+        self.bindings = binding_model.clean(raw.get("bindings"))   # unknown ids drop to factory, never fails
 
     def to_dict(self) -> dict:
-        return {k: getattr(self, k) for k in FIELDS}
+        """Only the owner's binding choices are stored (a missing key means factory); no key at all when none."""
+        out = {k: getattr(self, k) for k in FIELDS}
+        b = binding_model.clean(self.bindings)
+        stored = {k: b[k] for k in binding_model.BACK if b[k] != "shift"}
+        if b["combos"]:
+            stored["combos"] = dict(b["combos"])
+        if stored:
+            out["bindings"] = stored
+        return out
 
     def save(self) -> None:
         """Atomic, with a .bak. An unreadable file still on disk is copied first; when that copy cannot be made the

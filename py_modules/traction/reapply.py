@@ -9,8 +9,22 @@ import time
 from typing import Callable, Optional
 
 from .controls import apply_controller, transport_failure
-from .reapply_core import POLL, ReapplierCore, _StepClient
+from .reapply_core import POLL, Dropped, ReapplierCore, _StepClient
 from .settings import Settings
+
+
+class _TimedStepClient(_StepClient):
+    """The shared _StepClient (same lock, generation and Armoury-busy checks) that also passes the call's timeout on:
+    set_bindings needs 20 s (pad polling plus the factory reset), the shared one would use the 10 s default."""
+
+    async def call(self, cmd: str, args: Optional[dict] = None, timeout: float = 10.0) -> dict:
+        r = self._r
+        async with r.lock:
+            if self._gen != r.generation or r._busy():
+                raise Dropped()
+            reply = await r.client.call(cmd, args or {}, timeout)
+        self.transport |= r._is_transport_failure(reply)
+        return reply
 
 
 class Reapplier(ReapplierCore):
@@ -48,11 +62,13 @@ class Reapplier(ReapplierCore):
         data = info.get("data") if info.get("ok") else None
         written = False
         if isinstance(data, dict) and data.get("found"):
-            step_client = _StepClient(self, gen)
-            r = await apply_controller(step_client, self.settings)
+            step_client = _TimedStepClient(self, gen)
+            r = await apply_controller(step_client, self.settings, logger=self.log)
             transport |= step_client.transport
             if r.get("ok"):
                 written = True
+                if r.get("warning"):   # the buttons were not written (pad not seen) or were reset
+                    problems.append(r["warning"])
             else:
                 problems.append(r.get("message") or "The controller settings were not applied.")
         return problems, transport, written

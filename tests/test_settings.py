@@ -130,3 +130,34 @@ def test_migrate_not_run_when_traction_file_exists(tmp_path):
     p.write_text("{", encoding="utf-8")
     s = traction_settings(tmp_path)
     assert migrate_from_overdrive(od, s) is False and s.controller_mode == "gamepad"
+
+
+# ---------- button bindings ----------
+
+def test_bindings_default_to_factory_and_older_files_load(tmp_path):
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"controller_mode": "desktop", "user_set": True}), encoding="utf-8")
+    s = Settings.load(str(p))
+    assert s.bindings == {"back_left": "shift", "back_right": "shift", "combos": {}}
+    assert s.controller_mode == "desktop"
+
+
+def test_bindings_round_trip_and_junk_dropped(tmp_path):
+    p = tmp_path / "settings.json"
+    s = Settings.load(str(p))
+    s.bindings = {"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}}
+    s.save()
+    saved = json.loads(p.read_text(encoding="utf-8"))
+    # only the owner's choices are stored (missing keys mean factory)
+    assert saved["bindings"] == {"back_right": "b", "combos": {"a": "screenshot"}}
+    assert Settings.load(str(p)).bindings == {"back_left": "shift", "back_right": "b",
+                                              "combos": {"a": "screenshot"}}
+    p.write_text(json.dumps({"grip_vibration": False, "bindings": {
+        "back_left": "laser", "back_right": 3, "combos": {"a": "gone", "b": "esc", "back_left": "a", "zz": "a"}}}),
+        encoding="utf-8")
+    s = Settings.load(str(p))
+    assert s.bindings == {"back_left": "shift", "back_right": "shift", "combos": {"b": "esc"}}
+    assert s.grip_vibration is False                       # the other fields are kept
+    for bad in ("x", 1, None, ["a"]):
+        p.write_text(json.dumps({"bindings": bad}), encoding="utf-8")
+        assert Settings.load(str(p)).bindings == {"back_left": "shift", "back_right": "shift", "combos": {}}

@@ -211,3 +211,44 @@ def test_skip_message_names_traction(tmp_path, caplog):
             await r.apply_all()
         assert "Reapply skipped: no Traction settings chosen yet" in caplog.text
     run(go())
+
+
+# ---------- button bindings ----------
+
+from fake_helper import PAD_NOT_SEEN, RESET_MESSAGE  # noqa: E402
+
+CHOSEN = {"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}}
+
+
+def test_reapply_writes_bindings_with_the_long_timeout(tmp_path):
+    async def go():
+        c = _controller_client()
+        s = make(tmp_path, bindings=dict(CHOSEN))
+        r = Reapplier(c, s, clock=Clock(), power_source=Power())
+        assert await r.apply_all() is True
+        assert [x[0] for x in c.writes()] == ["set_controller_mode", "set_bindings", "set_bindings",
+                                              "set_vibration"]
+        assert c.timeouts["set_bindings"] == [20.0, 20.0]      # the step client keeps the timeout
+        assert r.warning == ""
+    run(go())
+
+
+def test_reapply_warns_when_the_pad_is_not_seen_or_reset(tmp_path):
+    async def go():
+        c = _controller_client()
+        c.bindings_reply = "not_seen"
+        s = make(tmp_path, bindings=dict(CHOSEN))
+        r = Reapplier(c, s, clock=Clock(), power_source=Power())
+        await r.apply_all()
+        assert r.warning == PAD_NOT_SEEN and r.rerun is False   # not a transport failure: not retried
+        assert s.bindings == CHOSEN
+        c.bindings_reply = "reset"
+        await r.apply_all()
+        assert r.warning == RESET_MESSAGE
+        assert s.bindings["combos"] == {} and s.bindings["back_right"] == "shift"
+        c.calls.clear()
+        c.bindings_reply = "ok"
+        await r.apply_all()
+        assert [x[0] for x in c.writes()] == ["set_controller_mode", "set_vibration"]
+        assert r.warning == ""
+    run(go())

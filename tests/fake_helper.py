@@ -16,6 +16,10 @@ import sys
 FRAME_SAMPLE = {"supported": True, "fps": 60.0, "gpuPowerW": 10, "errors": []}
 TOUCH = {"found": True, "enabled": True, "instanceId": "HID\\NVTK0603&COL01\\5&1234&0&0000"}
 ARMOURY = {"installed": False, "startTypes": {}, "running": []}
+# set_bindings replies (helper/src/TractionCore.cs SetBindings, Bindings.ResetMessage).
+RESET_MESSAGE = "The controller stopped responding, so buttons were reset to the factory set."
+RESET_FAILED = "The controller stopped responding and the factory reset failed: the write failed"
+PAD_NOT_SEEN = "Windows does not see the gamepad, so the buttons were not changed."
 
 DATA = {
     "hello": {"version": "0.1.0", "ally": True},
@@ -40,6 +44,8 @@ def reply(req):
         return {"id": req.get("id"), "ok": True, "message": "", "data": {"enabled": args.get("enabled")}}
     if cmd in ("armoury_stop", "armoury_restore"):
         return {"id": req.get("id"), "ok": True, "message": "", "data": {"startTypes": {}, "running": []}}
+    if cmd == "set_bindings":
+        return {"id": req.get("id"), "ok": True, "message": "", "data": {"zone": args.get("zone")}}
     return {"id": req.get("id"), "ok": False, "message": "Refused: unknown command '%s'." % cmd, "data": None}
 
 
@@ -83,7 +89,11 @@ READS = ("hello", "frame_sample", "foreground", "armoury_state", "controller_inf
 
 
 class FakeClient:
-    """Records (cmd, args) and answers like the helper. handlers[cmd] = async fn(args) -> reply overrides a reply."""
+    """Records (cmd, args) and answers like the helper. handlers[cmd] = async fn(args) -> reply overrides a reply.
+
+    set_bindings answers by `bindings_reply`: "ok" (written), "reset" (the pad went away after the write and the
+    factory set was written), "reset_failed" (the pad went away and the factory reset failed too) or "not_seen"
+    (Windows did not see the gamepad before the write: nothing written)."""
 
     def __init__(self):
         self.calls = []
@@ -93,6 +103,7 @@ class FakeClient:
         self.started = False
         self.stopped = False
         self.armoury_inflight = 0
+        self.bindings_reply = "ok"
         self.armoury = {"startTypes": {"ArmouryCrateSEService": "AutomaticDelayedStart",
                                        "LightingService": "Automatic"},
                         "running": ["ArmouryCrateSEService"]}
@@ -141,6 +152,8 @@ class FakeClient:
             return ok({"found": False, "pid": "0x1B4C", "xbox": False})   # off by default: no extra writes
         if cmd == "get_touchscreen":
             return ok({"found": False, "enabled": False, "instanceId": ""})
+        if cmd == "set_bindings":
+            return bindings_reply(self.bindings_reply, args)
         return ok(dict(args))
 
 
@@ -150,6 +163,16 @@ def ok(data):
 
 def fail(message, data=None):
     return {"id": 1, "ok": False, "message": message, "data": data}
+
+
+def bindings_reply(outcome, args):
+    if outcome == "reset":
+        return fail(RESET_MESSAGE, {"reset": True})
+    if outcome == "reset_failed":
+        return fail(RESET_FAILED, {"reset": False})
+    if outcome == "not_seen":
+        return fail(PAD_NOT_SEEN)
+    return ok({"zone": (args or {}).get("zone")})
 
 
 if __name__ == "__main__":

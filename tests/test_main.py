@@ -1011,3 +1011,204 @@ def test_unload_stops_the_overdrive_recheck(monkeypatch, tmp_path):
         await wait(p._unload())
         assert watch.done()
     run(go())
+
+
+# ---------- buttons ----------
+
+from fake_helper import PAD_NOT_SEEN, RESET_FAILED, RESET_MESSAGE  # noqa: E402
+
+NO_CONTROLLER = "The controller was not found; the choice is saved and applied when it is back."
+FACTORY = {"back_left": "shift", "back_right": "shift", "combos": {}}
+Z5_FACTORY = ["01-01", "00-00", "01-02", "00-00"]
+
+
+def binding_writes(c):
+    return [(a["zone"], a["slots"]) for cmd, a in c.calls if cmd == "set_bindings"]
+
+
+def test_get_state_shows_buttons(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        assert (await wait(p.get_state()))["buttons"] == {"back_left": "shift", "back_right": "shift",
+                                                          "combos": {}, "changed": 0}
+        s.bindings = {"back_left": "a", "back_right": "shift", "combos": {"x": "esc", "y": "tab"}}
+        assert (await wait(p.get_state()))["buttons"] == {"back_left": "a", "back_right": "shift",
+                                                          "combos": {"x": "esc", "y": "tab"}, "changed": 2}
+        assert (await main.Plugin().get_state())["buttons"]["changed"] == 0   # not an Ally: factory shown
+    run(go())
+
+
+def test_set_back_button_writes_zone_8_and_saves(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        controller_found(c)
+        gen = p.reapplier.generation
+        r = await wait(p.set_back_button("right", "b"))
+        assert r == {"ok": True, "message": ""}, r
+        assert p.reapplier.generation == gen + 1                       # a user change, under the shared lock
+        assert binding_writes(c) == [(8, ["02-8E", "02-8E", "01-02", "01-02"])]
+        assert [x[0] for x in c.writes()] == ["set_bindings"]          # only the affected zone, nothing else
+        assert c.timeouts["set_bindings"] == [20.0]
+        saved = Settings.load(s.path)
+        assert saved.bindings["back_right"] == "b" and saved.user_set is True
+        c.calls.clear()
+        assert (await wait(p.set_back_button("right", "shift")))["ok"]
+        assert binding_writes(c) == [(8, ["02-8E", "02-8E", "02-8F", "02-8F"])]
+        assert Settings.load(s.path).bindings == FACTORY
+        c.calls.clear()
+        for side, value in (("middle", "a"), ("left", "laser"), ("left", None), (1, "a")):
+            assert (await wait(p.set_back_button(side, value)))["ok"] is False, (side, value)
+        assert c.calls == []
+    run(go())
+
+
+def test_set_combo_and_unchanged_rewrites_factory_slots(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        controller_found(c)
+        assert (await wait(p.set_combo("a", "screenshot"))) == {"ok": True, "message": ""}
+        assert binding_writes(c) == [(5, ["01-01", "04-03-82-88-1B", "01-02", "00-00"])]
+        assert Settings.load(s.path).bindings["combos"] == {"a": "screenshot"}
+        c.calls.clear()
+        assert (await wait(p.set_combo("a", "unchanged")))["ok"]
+        assert binding_writes(c) == [(5, Z5_FACTORY)]                  # the zone is written back to factory
+        assert s.bindings["combos"] == {} and Settings.load(s.path).bindings == FACTORY
+        c.calls.clear()
+        for button, action in (("back_left", "a"), ("zz", "a"), ("a", "laser"), ("a", 3)):
+            assert (await wait(p.set_combo(button, action)))["ok"] is False, (button, action)
+        assert c.calls == []
+    run(go())
+
+
+def test_button_writes_follow_the_live_mode(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, controller_mode="desktop")
+        controller_found(c)
+        assert (await wait(p.set_combo("a", "screenshot")))["ok"]
+        assert binding_writes(c) == [(5, ["02-5A", "00-00", "02-76", "00-00"])]   # Desktop: desktop defaults
+        c.calls.clear()
+        s.controller_mode = "auto"
+        p.controller_auto._written = "desktop"                         # Auto has Desktop on the pad now
+        assert (await wait(p.set_combo("b", "esc")))["ok"]
+        assert binding_writes(c) == [(5, ["02-5A", "00-00", "02-76", "00-00"])]
+        c.calls.clear()
+        p.controller_auto._written = "gamepad"
+        assert (await wait(p.set_combo("b", "esc")))["ok"]
+        assert binding_writes(c) == [(5, ["01-01", "04-03-82-88-1B", "01-02", "02-76"])]
+    run(go())
+
+
+def test_reset_buttons_writes_all_zones_then_clears(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, bindings={"back_left": "a", "back_right": "shift", "combos": {"x": "esc"}})
+        controller_found(c)
+        assert (await wait(p.reset_buttons())) == {"ok": True, "message": ""}
+        writes = binding_writes(c)
+        assert [z for z, _ in writes] == list(range(1, 10))
+        assert writes[4] == (5, Z5_FACTORY) and writes[7] == (8, ["02-8E", "02-8E", "02-8F", "02-8F"])
+        assert s.bindings == FACTORY and Settings.load(s.path).bindings == FACTORY
+        c.calls.clear()
+        s.controller_mode = "desktop"
+        assert (await wait(p.reset_buttons()))["ok"]
+        assert binding_writes(c)[4] == (5, ["02-5A", "00-00", "02-76", "00-00"])   # factory for the current mode
+    run(go())
+
+
+def test_pad_lost_after_a_write_clears_the_buttons(tmp_path):
+    for outcome, message in (("reset", RESET_MESSAGE), ("reset_failed", RESET_FAILED)):   # Review Focus 4
+        async def go():
+            p, c, s = plugin_with(tmp_path, bindings={"back_left": "a", "back_right": "shift", "combos": {}})
+            controller_found(c)
+            c.bindings_reply = outcome
+            r = await wait(p.set_combo("x", "esc"))
+            assert r == {"ok": False, "message": message}
+            assert s.bindings == FACTORY and Settings.load(s.path).bindings == FACTORY
+            assert (await wait(p.get_state()))["buttons"]["changed"] == 0
+        run(go())
+
+
+def test_pad_not_seen_changes_nothing(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, bindings={"back_left": "a", "back_right": "shift", "combos": {}})
+        controller_found(c)
+        c.bindings_reply = "not_seen"
+        for call in (p.set_combo("x", "esc"), p.set_back_button("left", "shift"), p.reset_buttons()):
+            assert (await wait(call)) == {"ok": False, "message": PAD_NOT_SEEN}
+        assert s.bindings == {"back_left": "a", "back_right": "shift", "combos": {}}   # kept, as stored
+        assert not os.path.exists(s.path)
+        # a mode change still lands; the bindings refusal is reported with it
+        r = await wait(p.set_controller_mode("desktop"))
+        assert r["ok"] is True and r["message"] == PAD_NOT_SEEN
+        assert Settings.load(s.path).controller_mode == "desktop"
+        assert s.bindings["back_left"] == "a"
+    run(go())
+
+
+def test_buttons_saved_when_controller_missing(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        assert (await wait(p.set_back_button("left", "a"))) == {"ok": True, "message": NO_CONTROLLER}
+        assert (await wait(p.set_combo("y", "tab"))) == {"ok": True, "message": NO_CONTROLLER}
+        assert binding_writes(c) == []
+        saved = Settings.load(s.path)
+        assert saved.bindings == {"back_left": "a", "back_right": "shift", "combos": {"y": "tab"}}
+        assert saved.user_set is True
+        assert (await wait(p.reset_buttons())) == {"ok": True, "message": NO_CONTROLLER}
+        assert Settings.load(s.path).bindings == FACTORY
+    run(go())
+
+
+def test_button_setters_refused_while_busy(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        controller_found(c)
+        p.armoury._busy = True
+        for call in (p.set_back_button("left", "a"), p.set_combo("a", "esc"), p.reset_buttons()):
+            assert (await wait(call)) == {"ok": False, "message": BUSY}
+        p.armoury._busy = False
+        assert c.writes() == [] and not os.path.exists(s.path)
+    run(go())
+
+
+def test_mode_change_writes_the_bindings_for_the_new_mode(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, bindings={"back_left": "shift", "back_right": "shift",
+                                                  "combos": {"a": "screenshot"}})
+        controller_found(c)
+        seq = []
+        for mode in ("gamepad", "desktop", "gamepad"):                   # Review Focus 3
+            c.calls.clear()
+            assert (await wait(p.set_controller_mode(mode)))["ok"]
+            seq.append(binding_writes(c))
+        assert seq == [[(5, ["01-01", "04-03-82-88-1B", "01-02", "00-00"])],
+                       [(5, ["02-5A", "00-00", "02-76", "00-00"])],
+                       [(5, ["01-01", "04-03-82-88-1B", "01-02", "00-00"])]]
+    run(go())
+
+
+def test_old_overdrive_writes_no_bindings(monkeypatch, tmp_path):   # Review Focus 5
+    install_overdrive(tmp_path, "0.1.0")
+    os.makedirs(os.path.dirname(settings_file(tmp_path)), exist_ok=True)
+    with open(settings_file(tmp_path), "w", encoding="utf-8") as f:
+        json.dump({"controller_mode": "auto", "user_set": True,
+                   "bindings": {"back_right": "b", "combos": {"a": "screenshot"}}}, f)
+    c = FakeClient()
+    controller_found(c)
+    ally_main(monkeypatch, client=c)
+
+    async def go():
+        p = main.Plugin()
+        await p._main()
+        await wait(p._startup)
+        results = [await wait(p.set_back_button("left", "a")), await wait(p.set_combo("x", "esc")),
+                   await wait(p.reset_buttons())]
+        p.reapplier.rerun = True
+        await wait(p.reapplier.tick())
+        await wait(p.reapplier.apply_all())
+        await wait(p._unload())
+        return p, results
+    p, results = run(go())
+    assert [x for x in c.calls if x[0] == "set_bindings"] == []
+    for r in results:
+        assert r == {"ok": False, "message": UPDATE}
+    assert p.settings.bindings["back_right"] == "b"

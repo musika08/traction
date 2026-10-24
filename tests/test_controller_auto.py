@@ -461,3 +461,70 @@ def test_without_autotdp_the_loop_samples_itself(tmp_path):
         assert mode_writes(c) == ["desktop"]
         await ca.stop()
     run(go())
+
+
+# ---------- button bindings (Review Focus 3) ----------
+
+CHOSEN = {"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}}
+
+
+def binding_writes(c):
+    return [(a["zone"], a["slots"]) for cmd, a in c.calls if cmd == "set_bindings"]
+
+
+def test_auto_switch_writes_the_bindings_for_that_mode(tmp_path):
+    async def go():
+        c, r, ca, _ = setup(tmp_path)
+        r.settings.bindings = dict(CHOSEN)
+        ca.start()
+        front(c, ["steam.exe"])
+        for _ in range(3):
+            await ca.run_once()
+        gamepad = [(5, ["01-01", "04-03-82-88-1B", "01-02", "00-00"]), (8, ["02-8E", "02-8E", "01-02", "01-02"])]
+        desktop = [(5, ["02-5A", "00-00", "02-76", "00-00"]), (8, ["02-8E", "02-8E", "02-8F", "02-8F"])]
+        assert [x[0] for x in c.writes()] == ["set_controller_mode", "set_bindings", "set_bindings"]
+        assert binding_writes(c) == gamepad
+        c.calls.clear()
+        front(c, ["msedge.exe"])
+        frames(c, 0.0)
+        for _ in range(3):
+            await ca.run_once()
+        assert mode_writes(c) == ["desktop"] and binding_writes(c) == desktop
+        assert c.timeouts["set_bindings"][-1] == 20.0
+        c.calls.clear()
+        await ca.stop()                                       # back to Gamepad: the owner's set again
+        assert mode_writes(c) == ["gamepad"] and binding_writes(c) == gamepad
+    run(go())
+
+
+def test_auto_switch_without_bindings_writes_only_the_mode(tmp_path):
+    async def go():
+        c, r, ca, _ = setup(tmp_path)
+        ca.start()
+        front(c, ["msedge.exe"])
+        frames(c, 0.0)
+        for _ in range(3):
+            await ca.run_once()
+        await ca.stop()
+        assert binding_writes(c) == [] and mode_writes(c) == ["desktop", "gamepad"]
+    run(go())
+
+
+def test_auto_failed_mode_write_skips_the_bindings(tmp_path):
+    async def go():
+        c, r, ca, _ = setup(tmp_path)
+        r.settings.bindings = dict(CHOSEN)
+        c.handlers["set_controller_mode"] = lambda _a: _reply(fail("Controller not found"))
+        ca.start()
+        front(c, ["msedge.exe"])
+        frames(c, 0.0)
+        for _ in range(3):
+            await ca.run_once()
+        assert binding_writes(c) == []
+        await ca.stop()
+        assert binding_writes(c) == []
+    run(go())
+
+
+async def _reply(r):
+    return r

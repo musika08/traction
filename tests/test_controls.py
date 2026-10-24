@@ -198,3 +198,104 @@ def test_apply_controller_stops_after_transport_failure(tmp_path):
         assert not r["ok"] and r["message"] == RESTARTED
         assert [x[0] for x in c.calls] == ["set_controller_mode"]
     run(go())
+
+
+# ---------- button bindings ----------
+
+from fake_helper import PAD_NOT_SEEN, RESET_FAILED, RESET_MESSAGE  # noqa: E402
+
+CHOSEN = {"back_left": "shift", "back_right": "b", "combos": {"a": "screenshot"}}
+FACTORY = {"back_left": "shift", "back_right": "shift", "combos": {}}
+Z5_GAMEPAD = ["01-01", "04-03-82-88-1B", "01-02", "00-00"]
+Z5_DESKTOP = ["02-5A", "00-00", "02-76", "00-00"]
+Z8_GAMEPAD = ["02-8E", "02-8E", "01-02", "01-02"]
+Z8_DESKTOP = ["02-8E", "02-8E", "02-8F", "02-8F"]
+
+
+def binding_writes(c):
+    return [(a["zone"], a["slots"]) for cmd, a in c.calls if cmd == "set_bindings"]
+
+
+def test_apply_bindings_writes_only_changed_zones(tmp_path):
+    async def go():
+        c = FakeClient()
+        s = settings(tmp_path)
+        assert (await controls.apply_bindings(c, s, "gamepad"))["ok"]
+        assert binding_writes(c) == []                         # factory set: nothing written
+        s.bindings = dict(CHOSEN)
+        r = await controls.apply_bindings(c, s, "gamepad")
+        assert r["ok"] and r["message"] == ""
+        assert binding_writes(c) == [(5, Z5_GAMEPAD), (8, Z8_GAMEPAD)]
+        assert c.timeouts["set_bindings"] == [20.0, 20.0]      # 5 s pad polling plus the factory reset writes
+        c.calls.clear()
+        await controls.apply_bindings(c, s, "desktop")
+        assert binding_writes(c) == [(5, Z5_DESKTOP), (8, Z8_DESKTOP)]   # G-Helper's desktop defaults
+        c.calls.clear()
+        await controls.apply_bindings(c, s, "auto")
+        assert binding_writes(c) == [(5, Z5_GAMEPAD), (8, Z8_GAMEPAD)]   # auto starts in Gamepad
+    run(go())
+
+
+def test_apply_controller_writes_bindings_right_after_the_mode(tmp_path):
+    async def go():
+        c = FakeClient()
+        s = settings(tmp_path, bindings=dict(CHOSEN))
+        seq = []
+        for mode in ("gamepad", "desktop", "gamepad"):        # Review Focus 3
+            c.calls.clear()
+            r = await controls.apply_controller(c, s, mode)
+            assert r["ok"] and r["warning"] == ""
+            assert [x[0] for x in c.writes()] == ["set_controller_mode", "set_bindings", "set_bindings",
+                                                  "set_vibration"]
+            seq.append(binding_writes(c))
+        assert seq == [[(5, Z5_GAMEPAD), (8, Z8_GAMEPAD)], [(5, Z5_DESKTOP), (8, Z8_DESKTOP)],
+                       [(5, Z5_GAMEPAD), (8, Z8_GAMEPAD)]]
+        assert s.bindings == CHOSEN
+    run(go())
+
+
+def test_apply_controller_skips_bindings_when_the_mode_failed(tmp_path):
+    async def go():
+        c = FakeClient()
+        c.handlers["set_controller_mode"] = handler(fail("mode refused"))
+        r = await controls.apply_controller(c, settings(tmp_path, bindings=dict(CHOSEN)), "desktop")
+        assert not r["ok"]
+        assert binding_writes(c) == []                         # desktop slots on a gamepad-mode pad: never
+    run(go())
+
+
+def test_reset_reply_clears_and_saves_bindings(tmp_path):
+    for outcome, message in (("reset", RESET_MESSAGE), ("reset_failed", RESET_FAILED)):   # Review Focus 4
+        async def go():
+            c = FakeClient()
+            c.bindings_reply = outcome
+            s = settings(tmp_path, bindings=dict(CHOSEN), user_set=True)
+            s.save()
+            r = await controls.apply_controller(c, s, "gamepad")
+            assert r["ok"] and r["warning"] == message          # the mode and the vibration landed
+            assert binding_writes(c) == [(5, Z5_GAMEPAD)]       # stopped at the zone that lost the pad
+            assert s.bindings == FACTORY
+            assert Settings.load(s.path).bindings == FACTORY
+            assert ("set_vibration", {"strength": 100}) in c.writes()
+            c.calls.clear()
+            c.bindings_reply = "ok"
+            await controls.apply_controller(c, s, "gamepad")    # the next reapply writes nothing custom
+            assert binding_writes(c) == []
+        run(go())
+
+
+def test_pad_not_seen_keeps_bindings_and_logs_once(tmp_path, caplog):
+    async def go():
+        c = FakeClient()
+        c.bindings_reply = "not_seen"
+        s = settings(tmp_path, bindings=dict(CHOSEN))
+        for _ in range(3):
+            r = await controls.apply_controller(c, s, "desktop")
+            assert r["ok"] and r["warning"] == PAD_NOT_SEEN
+            assert not controls.transport_failure(r)
+        assert s.bindings == CHOSEN                            # not written, not a reset
+        assert binding_writes(c) == [(5, Z5_DESKTOP)] * 3
+        assert ("set_vibration", {"strength": 100}) in c.writes()
+    caplog.set_level("INFO")
+    run(go())
+    assert sum(PAD_NOT_SEEN in rec.getMessage() for rec in caplog.records) == 1

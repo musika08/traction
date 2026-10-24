@@ -19,6 +19,8 @@ docs/specs/2026-10-24-overdrive-controls-design.md sections 3.3, 4 and 5.2.
 - A write refused with "Controller not found" (no controller attached) is not tried again for NOT_FOUND_RETRY seconds,
   so a missing controller is not searched for (every HID device listed) at every tick.
 - An error inside the loop is logged (once a minute at most), Gamepad is written and the loop goes on.
+- Every mode write that lands is followed, under the same lock, by the owner's changed button zones for that mode
+  (controls.apply_bindings: Desktop gets G-Helper's desktop defaults there, Gamepad the owner's set).
 - stop() writes Gamepad, or Desktop when its optional mode callable (evaluated under the reapplier's lock, so a
   choice made while stop() waited is honoured) returns Desktop.
 """
@@ -27,6 +29,7 @@ import logging
 import time
 from typing import Callable, Optional
 
+from .controls import apply_bindings
 from .sampling import ERROR_LOG_EVERY, PERIOD, SAMPLE_TIMEOUT, _finite
 
 STEAM_EXES = ("steam.exe", "steamwebhelper.exe")
@@ -93,6 +96,8 @@ class ControllerAuto:
         async with self.reapplier.lock:
             m = DESKTOP if (mode is not None and mode() == DESKTOP) else GAMEPAD
             r = await self.client.call("set_controller_mode", {"mode": m})
+            if r.get("ok"):
+                await self._write_bindings(m)
         mode = m
         if not r.get("ok"):
             self.log.warning(f"Controller Auto could not put the controller back to {mode}: {r.get('message')}")
@@ -167,6 +172,8 @@ class ControllerAuto:
                     self._busy_seen = True
                 return
             r = await self.client.call("set_controller_mode", {"mode": mode})
+            if r.get("ok"):
+                await self._write_bindings(mode)
         if r.get("ok"):
             self._written = mode
             self._write_failed_logged_at = self._not_found_at = None
@@ -181,6 +188,16 @@ class ControllerAuto:
         if self._write_failed_logged_at is None or now - self._write_failed_logged_at >= ERROR_LOG_EVERY:
             self._write_failed_logged_at = now
             self.log.warning(f"Controller Auto could not set {mode}: {r.get('message')}")
+
+    async def _write_bindings(self, mode: str) -> None:
+        """The changed button zones for the mode just written (called under the reapplier's lock). A failure is
+        logged by apply_bindings (once per kind); the mode stays written."""
+        rp = self.reapplier
+        settings = getattr(rp, "settings", None)
+        blocked = getattr(rp, "_blocked", None)
+        if settings is None or (blocked is not None and blocked()):
+            return
+        await apply_bindings(self.client, settings, mode, self.log)
 
     # ---------- loop ----------
 
