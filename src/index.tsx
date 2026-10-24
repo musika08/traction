@@ -40,6 +40,7 @@ import {
   controllerBanner,
   controllerModeDescription,
   isBackButton,
+  nextOpen,
   primaryEnabled,
   secondaryNote,
   touchscreenCheck,
@@ -550,6 +551,7 @@ function Content() {
   const labels = actionLabels();
   const editSet = pickedSet ?? buttons?.live ?? 'gamepad';
   const collapsedButtons = buttonsCollapsed(state.blocked, unavailable);
+  if (collapsedButtons && openButton !== null) setOpenButton(null);
 
   const toggleArmoury = () => {
     if (armouryPending) return;
@@ -663,7 +665,7 @@ function Content() {
                 disabled={controllerDisabled}
                 primaryOn={primaryEnabled(b.data, buttons)}
                 switchOn={toggleTarget[b.data] ?? backSwitchOn(b.data, buttons)}
-                onToggleOpen={() => setOpenButton((o) => (o === b.data ? null : b.data))}
+                onToggleOpen={() => setOpenButton((o) => nextOpen(o, b.data, collapsedButtons))}
                 onPick={(slot, action) => run('buttons', () => setButton(editSet, b.data, slot, action))}
                 onSwitch={() =>
                   toggleSetting(

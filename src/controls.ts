@@ -75,6 +75,12 @@ export function buttonsCollapsed(blocked: string | undefined, unavailable: strin
   return !!blocked || !!unavailable;
 }
 
+// Which button row is expanded after a press on `pressed`: nothing opens or changes while the list is collapsed.
+export function nextOpen(current: string | null, pressed: string, collapsed: boolean): string | null {
+  if (collapsed) return null;
+  return current === pressed ? null : pressed;
+}
+
 export type ButtonEntry = { primary: string; secondary: string };
 
 export type ButtonsState = {

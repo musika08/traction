@@ -16,6 +16,7 @@ import {
   secondaryNote,
   primaryEnabled,
   buttonsCollapsed,
+  nextOpen,
   SET_OPTIONS,
   armouryDisabled,
   controllerBanner,
@@ -141,4 +142,12 @@ test('the button list collapses only when blocked or unavailable, not while work
   assert.equal(buttonsCollapsed(undefined, undefined), false);
   assert.equal(buttonsCollapsed('Update Overdrive', ''), true);
   assert.equal(buttonsCollapsed('', 'helper not running'), true);
+});
+
+test('nextOpen toggles a row, and never opens one while collapsed', () => {
+  assert.equal(nextOpen(null, 'a', false), 'a');
+  assert.equal(nextOpen('a', 'a', false), null);
+  assert.equal(nextOpen('a', 'b', false), 'b');
+  assert.equal(nextOpen(null, 'a', true), null);
+  assert.equal(nextOpen('a', 'a', true), null);
 });
