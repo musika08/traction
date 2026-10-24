@@ -109,7 +109,7 @@ namespace Traction.Helper.Tests
             Devices.Add(new HidCollection { Path = path, Vid = vid, Pid = pid, FeatureLength = featureLength, FeatureReportIds = ids });
         }
 
-        public List<HidCollection> List()
+        public virtual List<HidCollection> List()
         {
             Lists++;
             return new List<HidCollection>(Devices);
@@ -124,14 +124,15 @@ namespace Traction.Helper.Tests
         }
     }
 
-    // XInput pad 0 stand-in: answers from the queue in order, then Then for every later call.
+    // XInput pads 0-3 stand-in (bit i = pad i present): answers from the queue in order, then Then for every later
+    // call.
     public class FakePadCheck : IPadCheck
     {
-        public readonly Queue<bool> Answers = new Queue<bool>();
-        public bool Then = true;
+        public readonly Queue<int> Answers = new Queue<int>();
+        public int Then = 1;
         public int Calls;
 
-        public bool Present()
+        public int Pads()
         {
             Calls++;
             return Answers.Count > 0 ? Answers.Dequeue() : Then;

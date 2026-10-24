@@ -39,7 +39,7 @@ namespace Traction.Helper
             { "set_vibration", new[] { "strength" } },
             { "get_touchscreen", None },
             { "set_touchscreen", new[] { "enabled" } },
-            { "set_bindings", new[] { "zone", "slots" } },
+            { "set_bindings", new[] { "zone", "slots", "watch" } },
         };
 
         private static readonly string[] TopLevel = { "id", "cmd", "args" };
@@ -268,8 +268,21 @@ namespace Traction.Helper
         // feature report. stopOnError false still tries the remaining reports after a failure (the factory reset).
         private string SendReports(bool stopOnError, params byte[][] reports)
         {
+            return SendReports(stopOnError, 1, reports);
+        }
+
+        // findAttempts > 1 looks for the controller that many times, FindRetryMs apart, before giving up (the factory
+        // reset: a controller that just dropped off may take a moment to come back).
+        private string SendReports(bool stopOnError, int findAttempts, params byte[][] reports)
+        {
             if (Hid == null) return ControllerUnavailable;
-            HidInfo info = Hid.Find();
+            HidInfo info = null;
+            for (int a = 1; a <= findAttempts; a++)
+            {
+                info = Hid.Find();
+                if (info != null && info.Found) break;
+                if (a < findAttempts) sleep(FindRetryMs);
+            }
             if (info == null || !info.Found) return AsusHid.NotFound;
             foreach (byte[] r in reports)
                 if (info.FeatureLength < r.Length)
@@ -291,9 +304,15 @@ namespace Traction.Helper
 
         public const int PadPolls = 10;          // 10 x 500 ms = 5 s, as the probe waited
         public const int PadPollMs = 500;
+        public const int ConfirmPolls = 4;       // seen at 4 polls in a row (1.5 s steady, 2 s after the write at least)
+        public const int ResetFindAttempts = 3;  // the factory reset looks for the controller up to 3 times
+        public const int FindRetryMs = 1000;
 
-        // Writes one zone, then watches the gamepad: if Windows no longer sees it within 5 s, the full factory set
-        // is written at once. Refused without a write when the gamepad is not seen beforehand (no safety net).
+        // Writes one zone, then watches the gamepads: every XInput pad (0-3) seen before the write must be seen again
+        // at ConfirmPolls polls in a row; when they are not back by the 10th poll (5 s), or go again after it, the full
+        // factory set is written at once. Refused without a write when no gamepad is seen beforehand (no safety net).
+        // watch false (Desktop mode, where Windows sees no gamepad): no check, no polling, no factory reset; the zone
+        // is written and the reply says whether that worked.
         private string SetBindings(object id, Dictionary<string, object> args)
         {
             int zone;
@@ -311,25 +330,42 @@ namespace Traction.Helper
                 if (slots[i] == null) return ProtocolKit.Reply(id, false, "Refused: 'slots' must be a list of 4 binding codes.", null);
                 if (!Bindings.IsAllowed(slots[i])) return ProtocolKit.Reply(id, false, "Refused: unknown binding code '" + slots[i] + "'.", null);
             }
+            bool watch = true;
+            if (args.ContainsKey("watch") && !ProtocolKit.GetBool(args, "watch", out watch, out err))
+                return ProtocolKit.Reply(id, false, err, null);
+            var written = new Dictionary<string, object>();
+            written["zone"] = zone;
+
+            if (!watch)
+            {
+                if (Hid == null) return ProtocolKit.Reply(id, false, ControllerUnavailable, null);
+                err = SendReports(true, Bindings.ZoneReport(zone, slots));
+                return err != null ? ProtocolKit.Reply(id, false, err, null) : ProtocolKit.Reply(id, true, "", written);
+            }
 
             if (Hid == null || PadCheck == null) return ProtocolKit.Reply(id, false, ControllerUnavailable, null);
-            if (!PadCheck.Present()) return ProtocolKit.Reply(id, false, PadNotSeenMessage, null);
+            int before = PadCheck.Pads() & 0x0F;
+            if (before == 0) return ProtocolKit.Reply(id, false, PadNotSeenMessage, null);
 
             err = SendReports(true, Bindings.ZoneReport(zone, slots));
             if (err != null) return ProtocolKit.Reply(id, false, err, null);
 
-            for (int i = 0; i < PadPolls; i++)
+            int steady = 0;
+            for (int i = 1; i <= PadPolls + ConfirmPolls - 1; i++)
             {
                 sleep(PadPollMs);
-                if (PadCheck.Present())
+                if ((PadCheck.Pads() & before) == before)
                 {
-                    var d = new Dictionary<string, object>();
-                    d["zone"] = zone;
-                    return ProtocolKit.Reply(id, true, "", d);
+                    if (++steady >= ConfirmPolls) return ProtocolKit.Reply(id, true, "", written);
+                }
+                else
+                {
+                    steady = 0;
+                    if (i >= PadPolls) break;   // not back within 5 s, or gone again after that
                 }
             }
 
-            err = SendReports(false, Bindings.FactoryReset(IsXbox()));
+            err = SendReports(false, ResetFindAttempts, Bindings.FactoryReset(IsXbox()));
             var reset = new Dictionary<string, object>();
             reset["reset"] = err == null;
             if (err != null)

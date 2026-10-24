@@ -14,13 +14,15 @@ using System.Runtime.InteropServices;
 
 namespace Traction.Helper
 {
-    // Whether Windows still sees the gamepad. Injected so tests never touch XInput.
+    // Which gamepads Windows sees. Injected so tests never touch XInput.
     public interface IPadCheck
     {
-        bool Present();
+        // Bit i set = XInput pad i (0-3) is present.
+        int Pads();
     }
 
-    // XInput pad 0 (the Ally's built-in gamepad on the owner's device). Read only; any failure counts as not present.
+    // XInput pads 0-3 (the Ally's built-in gamepad is pad 0 on the owner's device, but another pad may take index 0).
+    // Read only; any failure counts as not present.
     public class XInputPadCheck : IPadCheck
     {
         [StructLayout(LayoutKind.Sequential)]
@@ -32,14 +34,19 @@ namespace Traction.Helper
         [DllImport("xinput1_4.dll")]
         private static extern int XInputGetState(int userIndex, out XInputState state);
 
-        public bool Present()
+        public int Pads()
         {
-            try
+            int mask = 0;
+            for (int i = 0; i < 4; i++)
             {
-                XInputState s;
-                return XInputGetState(0, out s) == 0;
+                try
+                {
+                    XInputState s;
+                    if (XInputGetState(i, out s) == 0) mask |= 1 << i;
+                }
+                catch (Exception) { }
             }
-            catch (Exception) { return false; }
+            return mask;
         }
     }
 

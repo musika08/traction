@@ -522,17 +522,18 @@ namespace Traction.Helper.Tests
         public static void SetBindings_Zone8Bytes()
         {
             var rig = new Rig();
-            var r = rig.Send(SetLine(1, "8", "[\"02-8E\",\"02-8E\",\"01-02\",\"01-02\"]"));
+            var r = rig.Send(SetLine(1, "8", "[\"02-8E\",\"02-8E\",\"01-02\",\"02-8F\"]"));
             True(Ok(r), "ok: " + Msg(r));
             Equal(8, ((Dictionary<string, object>)r["data"])["zone"], "echoed zone");
             var expected = Padded(64, 0x5A, 0xD1, 0x02, 0x08, 0x2C);
             expected[5] = 0x02; expected[7] = 0x8E;     // left back button: Shift
             expected[16] = 0x02; expected[18] = 0x8E;   // its combo: Shift
             expected[27] = 0x01; expected[28] = 0x02;   // right back button: B
-            expected[38] = 0x01; expected[39] = 0x02;   // its combo: B
+            expected[38] = 0x02; expected[40] = 0x8F;   // its combo: the factory Shift code (02 00 8F)
             WritesAre(rig.Bus, "zone 8", expected);
-            Equal(2, rig.Pad.Calls, "checked before the write and once after");
-            SeqEqual(new[] { "500" }, rig.Sleeps.ConvertAll(n => n.ToString()), "one 500 ms wait");
+            // M5: present at the first poll and still present at poll 4 (2 s after the write) before ok
+            Equal(5, rig.Pad.Calls, "checked before the write and at four polls after");
+            SeqEqual(new[] { "500", "500", "500", "500" }, rig.Sleeps.ConvertAll(n => n.ToString()), "four 500 ms waits");
         }
 
         public static void SetBindings_RefusesBadInputWithoutWriting()
@@ -556,7 +557,10 @@ namespace Traction.Helper.Tests
                 SetLine(14, "5", "[\"01-01\",\"00-00\",\"01-02\",\"0-0\"]"),
                 "{\"id\":15,\"cmd\":\"set_bindings\",\"args\":{\"zone\":5}}",
                 "{\"id\":16,\"cmd\":\"set_bindings\",\"args\":{\"slots\":" + four + "}}",
-                "{\"id\":17,\"cmd\":\"set_bindings\",\"args\":{\"zone\":5,\"slots\":" + four + ",\"x\":1}}" })
+                "{\"id\":17,\"cmd\":\"set_bindings\",\"args\":{\"zone\":5,\"slots\":" + four + ",\"x\":1}}",
+                "{\"id\":19,\"cmd\":\"set_bindings\",\"args\":{\"zone\":5,\"slots\":" + four + ",\"watch\":1}}",
+                "{\"id\":20,\"cmd\":\"set_bindings\",\"args\":{\"zone\":5,\"slots\":" + four + ",\"watch\":\"no\"}}",
+                "{\"id\":21,\"cmd\":\"set_bindings\",\"args\":{\"zone\":5,\"slots\":" + four + ",\"watch\":null}}" })
             {
                 var r = rig.Send(line);
                 True(!Ok(r), "refused: " + line);
@@ -575,8 +579,8 @@ namespace Traction.Helper.Tests
             {
                 var rig = new Rig();
                 if (xbox) rig.Core.ProductName = XboxProduct;
-                rig.Pad.Answers.Enqueue(true);   // seen before the write
-                rig.Pad.Then = false;            // gone afterwards
+                rig.Pad.Answers.Enqueue(1);   // seen before the write
+                rig.Pad.Then = 0;             // gone afterwards
                 var r = rig.Send(SetLine(1, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
                 True(!Ok(r), "not ok");
                 Equal("The controller stopped responding, so buttons were reset to the factory set.", Msg(r), "message");
@@ -594,8 +598,8 @@ namespace Traction.Helper.Tests
         public static void SetBindings_ResetWriteFails_TriesTheRest()
         {
             var rig = new Rig();
-            rig.Pad.Answers.Enqueue(true);
-            rig.Pad.Then = false;
+            rig.Pad.Answers.Enqueue(1);
+            rig.Pad.Then = 0;
             var bus = new FailAfterBus(1);   // the zone report goes through, every reset write fails
             rig.Core.Hid = new AsusHid(bus);
             var r = rig.Send(SetLine(1, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
@@ -621,22 +625,22 @@ namespace Traction.Helper.Tests
         public static void SetBindings_PadBackOnLaterPoll_Ok()
         {
             var rig = new Rig();
-            rig.Pad.Answers.Enqueue(true);
-            rig.Pad.Answers.Enqueue(false);
-            rig.Pad.Answers.Enqueue(false);
-            rig.Pad.Then = true;
+            rig.Pad.Answers.Enqueue(1);
+            rig.Pad.Answers.Enqueue(0);
+            rig.Pad.Answers.Enqueue(0);
+            rig.Pad.Then = 1;
             var r = rig.Send(SetLine(1, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
             True(Ok(r), "ok: " + Msg(r));
             Equal(1, rig.Bus.Writes.Count, "only the zone report");
-            Equal(4, rig.Pad.Calls, "seen on the third poll");
-            Equal(3, rig.Sleeps.Count, "three waits");
+            Equal(7, rig.Pad.Calls, "seen on the third poll, confirmed on the sixth");
+            Equal(6, rig.Sleeps.Count, "six waits");
         }
 
         // Without a gamepad to watch there is no safety net, so nothing is written.
         public static void SetBindings_NoPadBeforeWrite_Refused()
         {
             var rig = new Rig();
-            rig.Pad.Then = false;
+            rig.Pad.Then = 0;
             var r = rig.Send(SetLine(1, "5", "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]"));
             True(!Ok(r), "refused");
             Equal(TractionCore.PadNotSeenMessage, Msg(r), "message");
@@ -676,6 +680,165 @@ namespace Traction.Helper.Tests
             Equal(TractionCore.NotAllyMessage, Msg(r), "refused off the Ally");
             Equal(0, not.Bus.Writes.Count, "nothing written");
             Equal(0, not.Pad.Calls, "no gamepad check");
+        }
+
+        private static string WatchLine(int id, string zone, string slots, string watch)
+        {
+            return "{\"id\":" + id + ",\"cmd\":\"set_bindings\",\"args\":{\"zone\":" + zone + ",\"slots\":" + slots
+                + ",\"watch\":" + watch + "}}";
+        }
+
+        private const string Z5 = "[\"01-01\",\"01-02\",\"01-02\",\"00-00\"]";
+
+        // I2b: watch false (Desktop mode hides the XInput pad): no pad check, no polling, no factory reset.
+        public static void SetBindings_WatchFalse_JustWrites()
+        {
+            var rig = new Rig();
+            rig.Pad.Then = 0;   // Desktop mode: Windows sees no pad
+            var r = rig.Send(WatchLine(1, "5", Z5, "false"));
+            True(Ok(r), "ok: " + Msg(r));
+            Equal(5, ((Dictionary<string, object>)r["data"])["zone"], "echoed zone");
+            WritesAre(rig.Bus, "zone 5 only", ZoneBytes(5, "01-01", "01-02", "01-02", "00-00"));
+            Equal(0, rig.Pad.Calls, "no gamepad check");
+            Equal(0, rig.Sleeps.Count, "no wait");
+
+            var failing = new Rig();
+            failing.Pad.Then = 0;
+            failing.Bus.Fail = true;
+            r = failing.Send(WatchLine(2, "5", Z5, "false"));
+            True(!Ok(r) && Msg(r).Contains("feature write failed"), "error passed on: " + Msg(r));
+            True(r["data"] == null, "no reset data");
+            Equal(1, failing.Bus.Writes.Count, "one attempt, no factory set");
+            Equal(0, failing.Pad.Calls, "no gamepad check");
+
+            var noPad = new Rig();
+            noPad.Core.PadCheck = null;
+            True(Ok(noPad.Send(WatchLine(3, "5", Z5, "false"))), "the pad check is not needed");
+
+            var gone = new Rig();
+            gone.Bus.Devices.RemoveAll(c => c.Path == FakeHidBus.MatchPath);
+            Equal("Controller not found", Msg(gone.Send(WatchLine(4, "5", Z5, "false"))), "not found");
+            Equal(0, gone.Bus.Writes.Count, "nothing written");
+        }
+
+        public static void SetBindings_WatchTrue_IsTheDefault()
+        {
+            var rig = new Rig();
+            rig.Pad.Then = 0;
+            var r = rig.Send(WatchLine(1, "5", Z5, "true"));
+            Equal(TractionCore.PadNotSeenMessage, Msg(r), "watched: refused without a pad");
+            Equal(0, rig.Bus.Writes.Count, "nothing written");
+        }
+
+        // M4: every XInput index present before the write must still be there; any missing one means the pad went.
+        public static void SetBindings_PadIndexMissing_WritesFactorySet()
+        {
+            var rig = new Rig();
+            rig.Pad.Answers.Enqueue(3);   // pads 0 and 1 before the write
+            rig.Pad.Then = 1;             // pad 1 gone afterwards
+            var r = rig.Send(SetLine(1, "5", Z5));
+            True(!Ok(r), "not ok");
+            Equal(Bindings.ResetMessage, Msg(r), "reset");
+            Equal(true, ((Dictionary<string, object>)r["data"])["reset"], "data.reset");
+            Equal(1 + FactoryBytes(false).Length, rig.Bus.Writes.Count, "zone then the factory set");
+
+            var more = new Rig();
+            more.Pad.Answers.Enqueue(1);   // pad 0 before
+            more.Pad.Then = 3;             // pad 0 still there, another one appeared: fine
+            True(Ok(more.Send(SetLine(2, "5", Z5))), "an extra pad is not a loss");
+            Equal(1, more.Bus.Writes.Count, "only the zone report");
+
+            var other = new Rig();
+            other.Pad.Answers.Enqueue(2);  // only pad 1 present: still a pad to watch
+            other.Pad.Then = 2;
+            True(Ok(other.Send(SetLine(3, "5", Z5))), "pad 1 alone is watched");
+        }
+
+        // M5: a pad seen at a poll must still be seen 1.5 s later (four polls in a row) before ok; a gap starts over.
+        public static void SetBindings_PadMustStayBeforeOk()
+        {
+            var rig = new Rig();
+            rig.Pad.Answers.Enqueue(1);   // before
+            foreach (int a in new[] { 1, 1, 1, 0, 1, 1, 1 }) rig.Pad.Answers.Enqueue(a);
+            rig.Pad.Then = 1;
+            var r = rig.Send(SetLine(1, "5", Z5));
+            True(Ok(r), "ok after four in a row: " + Msg(r));
+            Equal(9, rig.Pad.Calls, "polls 5-8 confirm after the gap at poll 4");
+            Equal(1, rig.Bus.Writes.Count, "no factory set");
+
+            var flicker = new Rig();
+            flicker.Pad.Answers.Enqueue(1);
+            foreach (int a in new[] { 1, 0, 1, 0, 1, 0, 1, 0, 1, 0 }) flicker.Pad.Answers.Enqueue(a);
+            flicker.Pad.Then = 0;
+            r = flicker.Send(SetLine(2, "5", Z5));
+            Equal(Bindings.ResetMessage, Msg(r), "never steady: factory set");
+            Equal(10, flicker.Sleeps.Count, "gone at poll 10: no more waiting");
+
+            // first seen at the last regular poll: three more polls confirm it
+            var late = new Rig();
+            late.Pad.Answers.Enqueue(1);
+            for (int i = 0; i < 9; i++) late.Pad.Answers.Enqueue(0);
+            late.Pad.Then = 1;
+            r = late.Send(SetLine(3, "5", Z5));
+            True(Ok(r), "seen at poll 10, confirmed at 13: " + Msg(r));
+            Equal(13, late.Sleeps.Count, "13 waits");
+
+            // seen at poll 10, gone at 11: factory set
+            var lost = new Rig();
+            lost.Pad.Answers.Enqueue(1);
+            for (int i = 0; i < 9; i++) lost.Pad.Answers.Enqueue(0);
+            lost.Pad.Answers.Enqueue(1);
+            lost.Pad.Then = 0;
+            r = lost.Send(SetLine(4, "5", Z5));
+            Equal(Bindings.ResetMessage, Msg(r), "lost again: factory set");
+            Equal(11, lost.Sleeps.Count, "stopped at the gap after poll 10");
+        }
+
+        // M6: the factory reset looks for the controller up to 3 times, 1 s apart, before giving up.
+        public static void SetBindings_ResetRetriesFind()
+        {
+            var rig = new Rig();
+            rig.Pad.Answers.Enqueue(1);
+            rig.Pad.Then = 0;
+            var bus = new HidingBus(2, 2);   // after the zone write (Find + write), hidden for the next 2 lookups
+            rig.Core.Hid = new AsusHid(bus);
+            var r = rig.Send(SetLine(1, "5", Z5));
+            Equal(Bindings.ResetMessage, Msg(r), "found on the third try: reset written");
+            Equal(1 + FactoryBytes(false).Length, bus.Writes.Count, "zone then the whole factory set");
+            var tail = rig.Sleeps.GetRange(rig.Sleeps.Count - 2, 2);
+            SeqEqual(new[] { "1000", "1000" }, tail.ConvertAll(n => n.ToString()), "two 1 s waits between the tries");
+
+            var never = new Rig();
+            never.Pad.Answers.Enqueue(1);
+            never.Pad.Then = 0;
+            var bus2 = new HidingBus(2, 100);
+            never.Core.Hid = new AsusHid(bus2);
+            r = never.Send(SetLine(2, "5", Z5));
+            True(!Ok(r) && Msg(r).Contains("factory reset failed") && Msg(r).Contains("Controller not found"), "gave up: " + Msg(r));
+            Equal(false, ((Dictionary<string, object>)r["data"])["reset"], "data.reset false");
+            Equal(1, bus2.Writes.Count, "only the zone report");
+            Equal(2 + 3, bus2.Lists, "zone Find and write, then three tries");
+            Equal(10 + 2, never.Sleeps.Count, "ten polls, two retry waits");
+
+            // the zone write itself does not retry: a missing controller is refused at once
+            var plain = new Rig();
+            var bus3 = new HidingBus(0, 100);
+            plain.Core.Hid = new AsusHid(bus3);
+            Equal("Controller not found", Msg(plain.Send(SetLine(3, "5", Z5))), "not found");
+            Equal(1, bus3.Lists, "one lookup");
+        }
+
+        // Hides the controller collection for `count` List calls after the first `after` ones.
+        private class HidingBus : FakeHidBus
+        {
+            private readonly int after, count;
+            public HidingBus(int after, int count) { this.after = after; this.count = count; }
+            public override List<HidCollection> List()
+            {
+                var l = base.List();
+                if (Lists > after && Lists <= after + count) l.RemoveAll(c => c.Path == MatchPath);
+                return l;
+            }
         }
 
         // ---------- touchscreen and foreground ----------
