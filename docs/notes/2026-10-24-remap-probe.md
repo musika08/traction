@@ -114,3 +114,11 @@ written to the device by Traction.
   Command Center, CC long = 0x04 Armoury Crate (F21). Installed defaults: short `05 00 27 | 05 00 17`, long
   `05 00 16 | 05 00 04`.
 - Open: whether the slots survive a power cycle; what zeroed CC slots do.
+- **Device check (2026-10-25, Armoury Crate services stopped, sent with the raw probe tool):**
+  - The owner's own values (single `04 00 00 03 8C 88 76` / CC `05 00 17`; long `05 00 28` / CC `05 00 04`):
+    accepted (`ok`), Library single still typed Ctrl+Shift+Esc on MI_03, Command Center still sent `5A A6`.
+  - Test values (single `05 00 1C`, long `04 00 00 01 76`): a quick press typed Win+D (Show desktop) on MI_03 (plus
+    two `5A EC` on the vendor collection), a hold typed Esc only on the hold; Command Center unchanged.
+  - After sleep and wake the controller had dropped them: a quick press typed F22 (vk 0x85, scan 0x6D, likely the
+    firmware's default Xbox Library), a hold showed nothing on the keyboard. So the press bindings must be rewritten
+    after every wake (Traction's reapply does). Owner's values restored afterwards.
