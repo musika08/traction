@@ -234,3 +234,26 @@ export function secondaryNote(state: { m1_secondary?: boolean; m2_secondary?: bo
   if (!state) return '';
   return state.m1_secondary || state.m2_secondary ? '' : SECONDARY_NOTE;
 }
+
+// ---------- Armoury Crate button ----------
+
+export const ARMOURY_BUTTON_LABEL = 'Armoury Crate button';
+export const ARMOURY_BUTTON_NOTE =
+  "If Armoury Crate also has an action for this button, both run. Set it to nothing in Armoury Crate's Shortcuts & Key Binding.";
+
+// Ids as in the backend's armoury_button.ACTIONS (no gamepad buttons, no touch keyboard); labels from ACTIONS.
+const ARMOURY_BUTTON_IDS = [
+  'nothing', 'mouse_left', 'mouse_right', 'mouse_middle', 'scroll_up', 'scroll_down', 'esc', 'enter', 'tab',
+  'backspace', 'space', 'up', 'down', 'left', 'right', 'page_up', 'page_down', 'win', 'show_desktop', 'screenshot',
+  'task_manager', 'close_window', 'alt_tab', 'win_tab', 'volume_up', 'volume_down',
+];
+
+export function armouryButtonOptions(): { data: string; label: string }[] {
+  const labels = actionLabels();
+  return ARMOURY_BUTTON_IDS.map((id) => ({ data: id, label: labels[id] ?? id }));
+}
+
+// The note shows only while an action is set.
+export function armouryButtonNote(action: string | undefined): string {
+  return !action || action === 'nothing' ? '' : ARMOURY_BUTTON_NOTE;
+}

@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { FaCheck, FaGamepad } from 'react-icons/fa';
 import {
   ARMOURY_BUSY,
+  ARMOURY_BUTTON_LABEL,
   ARMOURY_DESCRIPTION,
   ARMOURY_LABEL,
   BACK_SECONDARY_LABEL,
@@ -32,6 +33,8 @@ import {
   TOUCH_TIMEOUT_TEXT,
   actionLabels,
   actionOptions,
+  armouryButtonNote,
+  armouryButtonOptions,
   armouryChecked,
   armouryDisabled,
   backSwitchOn,
@@ -59,6 +62,7 @@ type State = {
   vibration: boolean;
   touchscreen: { found: boolean; enabled: boolean };
   buttons?: ButtonsState;
+  armoury_button?: string;
   blocked: string;
   note: string;
   busy: boolean;
@@ -74,6 +78,7 @@ const setTouchscreen = callable<[boolean], Result>('set_touchscreen');
 const setButton = callable<[string, string, string, string], Result>('set_button');
 const setBackSecondary = callable<['left' | 'right', boolean], Result>('set_back_secondary');
 const resetButton = callable<[string, string], Result>('reset_button');
+const setArmouryButton = callable<[string], Result>('set_armoury_button');
 const resetAllButtons = callable<[], Result>('reset_all_buttons');
 const setArmouryReplaced = callable<[boolean], Result>('set_armoury_replaced');
 
@@ -683,6 +688,16 @@ function Content() {
               />
             );
           })}
+          <PanelSectionRow>
+            <InlinePicker
+              label={ARMOURY_BUTTON_LABEL}
+              options={armouryButtonOptions()}
+              value={state.armoury_button ?? 'nothing'}
+              disabled={disabled}
+              onChange={(v) => run('buttons', () => setArmouryButton(v))}
+            />
+          </PanelSectionRow>
+          <Note text={armouryButtonNote(state.armoury_button)} />
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={controllerDisabled} onClick={() => run('buttons', () => resetAllButtons())}>
               {RESET_ALL_LABEL}

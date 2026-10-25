@@ -23,6 +23,9 @@ import {
   controllerModeDescription,
   touchscreenCheck,
   keepPickedSet,
+  ARMOURY_BUTTON_LABEL,
+  armouryButtonOptions,
+  armouryButtonNote,
 } from '../../src/controls.ts';
 import { rowValue, pressRow, choose, pressCancel, focusIndex } from '../../src/picker.ts';
 
@@ -175,4 +178,21 @@ test('nextOpen toggles a row, and never opens one while collapsed', () => {
   assert.equal(nextOpen('a', 'b', false), 'b');
   assert.equal(nextOpen(null, 'a', true), null);
   assert.equal(nextOpen('a', 'a', true), null);
+});
+
+test('Armoury Crate button label, options and note', () => {
+  assert.equal(ARMOURY_BUTTON_LABEL, 'Armoury Crate button');
+  const ids = ['nothing', 'mouse_left', 'mouse_right', 'mouse_middle', 'scroll_up', 'scroll_down', 'esc', 'enter', 'tab',
+    'backspace', 'space', 'up', 'down', 'left', 'right', 'page_up', 'page_down', 'win', 'show_desktop', 'screenshot',
+    'task_manager', 'close_window', 'alt_tab', 'win_tab', 'volume_up', 'volume_down'];
+  const labels = actionLabels();
+  const opts = armouryButtonOptions();
+  assert.deepEqual(opts.map((o) => o.data), ids);
+  assert.deepEqual(opts.map((o) => o.label), ids.map((i) => labels[i]));
+  assert.equal(opts[0].label, 'Nothing');
+  assert.equal(armouryButtonNote('nothing'), '');
+  assert.equal(
+    armouryButtonNote('task_manager'),
+    "If Armoury Crate also has an action for this button, both run. Set it to nothing in Armoury Crate's Shortcuts & Key Binding.",
+  );
 });
