@@ -59,4 +59,10 @@ running; nothing opened on any press.
 - **Armoury Crate / Library** (right side, below Menu): `5A EC` (236) once per press, no release report, the same
   before and after InitInput; a 3 s hold also gave one `5A EC` (its long press was not checked with the keyboard
   hook). G-Helper ignores 236. FINDINGS saw no Library report in its own test, and one stray `5A EC`.
+- **Armoury Crate long press** (second run, keyboard hook on, typing filtered out): a 6 s hold gave `5A EC` at the
+  press and again 6.6 s later; a 10 s hold gave `5A EC` at the press and again 9.95 s later, at the release. No key on
+  the keyboard interface. Quick presses and a 3 s hold gave a single `5A EC`. So the firmware repeats 236 at the
+  release only after a long hold (threshold somewhere between 3 and 6 s), and a quick press can't be told apart
+  from the start of a long hold until that time has passed. (One stray F22, vk 0x85 scan 0x6D, came in a run where
+  the owner pressed a different button; not reproduced.)
 - Back button + Command Center: not tested.
