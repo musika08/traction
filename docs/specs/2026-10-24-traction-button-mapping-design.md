@@ -21,7 +21,7 @@ guides (FAQ 1050220, 1050046, the ROG Ally remap guide, the Armoury Crate SE v3 
   G-Helper's gamepad and desktop defaults.
 - **Per button "Reset to factory"** and **"Reset all buttons"** (both sets).
 - The **Xbox button** is not touched (Steam uses it as its own menu button, which the owner wants to keep).
-- **Command Center and Armoury Crate buttons:** Part B, see section 6.
+- **Armoury Crate button:** single press, Part B, see section 6. The Command Center button is not Traction's.
 
 ## 2. Panel
 
@@ -59,19 +59,44 @@ Primary in its button slot and keeps the factory code in its secondary slot (the
 actions become that button's Gamepad Primary with its switch off; v1 combos become Gamepad Secondaries.
 The mode write is followed by the zones of that mode's set (changed or touched), as now.
 
-## 6. Part B (after a device probe): Command Center and Armoury Crate buttons
+## 6. Part B: the Armoury Crate button (single press)
 
-Not firmware-bindable; they send vendor events on the controller's 0x5A input report that a program must catch
-(on the Xbox Ally X the Armoury Crate/Library button sends code 147; codes for Command Center to be found by the
-probe). Traction's helper would read those reports and run the action itself: **Single press** and **Long press**,
-keyboard/mouse/Windows actions only (no gamepad buttons: Windows cannot fake one without an extra driver).
-First a probe: with Armoury Crate stopped, log what each press sends, and check what the device legend's defaults
-(Gaming Copilot, Push to Talk, Voice typing, Game Bar) come from.
+Probe: `docs/notes/2026-10-24-remap-probe.md`, "Part B probe" (2026-10-25), and `X:\Projects\Armoury Crate\FINDINGS.md`.
+
+**What the owner gets:** a row **"Armoury Crate button"** (the button on the right side, below Menu) in the Buttons
+section, with one inline picker. The chosen action runs the moment the button is pressed. Default **Nothing**:
+Traction leaves the button alone and doesn't listen. Owner's choice: single press only (a long press would make
+every single press wait a few seconds).
+
+- **One setting for both modes** (Gamepad and Desktop): Armoury Crate also keeps one per profile.
+- **Actions:** the action list's mouse, key and Windows entries (Left/Right/Middle click, Scroll up/down, Esc, Enter,
+  Tab, Backspace, Space, arrows, Page Up/Down, Windows key, Show desktop, Screenshot, Task Manager, Close window,
+  Alt+Tab, Win+Tab, Volume up/down). Not the gamepad buttons: Windows can't fake one without an extra driver. Not
+  "Show touch keyboard" yet (it is a firmware media code with no plain key behind it).
+- **Not touched:** the Command Center button (its quick press is planned for Overdrive's "Command Center button"
+  option and the Bar; its long press, the key F21, opens Armoury Crate SE) and the Xbox button.
+- **If Armoury Crate also acts on the button** (its own Shortcuts & Key Binding setting for the Library button):
+  both happen. The row's note says to set that one to nothing in Armoury Crate. In the probe nothing opened from
+  Armoury Crate with all its services running.
+
+**How it works:**
+- The button sends the vendor input report `5A EC` (236) on the controller's 0x5A collection (the one Traction
+  already finds for its feature reports). Traction's helper opens that collection for shared reading (read only;
+  Armoury Crate and G-Helper keep their own reads) on a background thread, only while an action is chosen.
+- On `5A EC` the helper sends the action with SendInput (keys as scan codes, volume as the media keys, mouse as
+  mouse input). The helper runs in the owner's desktop session with admin rights (checked: session 1, user Musika),
+  so its input reaches every window, Task Manager included.
+- New helper command `set_button_action {action}` (allow-listed ids, `nothing` stops the reader). main.py sends it
+  on start and on every change; the setting is stored in `settings.json` (`armoury_button`).
+- After sleep or an unplug the read fails: the helper reopens the collection every 2 s until it is back.
+- **Known limit:** after a hold of over about 5 s the firmware sends `5A EC` again at the release, which can't be
+  told apart from a new press. Such a hold runs the action twice. A repeat within 0.5 s is ignored (bounce).
 
 ## 7. Tests
 
 Unit: the v2 settings shape and v1 migration; per-mode slots; switch off/on for M1/M2; per-button and full reset;
-panel helpers. Live on the Ally (Steam Big Picture in front): A Primary = B; M1 + A Secondary = Screenshot; M1 switch
+panel helpers; Part B: only `5A EC` triggers, the 0.5 s bounce, each action's input sequence, the allow-list,
+`nothing` stops the reader. Live (Part B): each action once from Steam Big Picture and the desktop; after sleep. Live on the Ally (Steam Big Picture in front): A Primary = B; M1 + A Secondary = Screenshot; M1 switch
 off and M1 Primary = B; Desktop set differs from Gamepad; sleep and wake keeps both; reset all.
 
 ## 8. Out of scope
