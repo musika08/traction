@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Threading;
 using Ally.Shared;
 
 namespace Traction.Helper.Tests
@@ -180,6 +182,77 @@ namespace Traction.Helper.Tests
 
         public bool AutoSrInstalled() { return Installed; }
         public string ForegroundExe() { return Foreground; }
+    }
+
+    // The controller's 0x5A input collection stand-in. Open answers from OpenResults in order, then true. Read hands
+    // out the scripted items in order (a byte[] is returned, an Exception is thrown) and blocks while the script is
+    // empty, until Push or Close; a closed source throws IOException, like the real one after CancelIoEx.
+    public class FakeReportSource : IReportSource
+    {
+        private readonly object gate = new object();
+        private readonly Queue<object> script = new Queue<object>();
+        public readonly Queue<bool> OpenResults = new Queue<bool>();
+        public int OpenCalls, Closes;
+        private bool open;
+
+        public bool IsOpen { get { lock (gate) return open; } }
+
+        public void Push(object item)
+        {
+            lock (gate) { script.Enqueue(item); Monitor.PulseAll(gate); }
+        }
+
+        public bool Open()
+        {
+            lock (gate)
+            {
+                OpenCalls++;
+                open = OpenResults.Count > 0 ? OpenResults.Dequeue() : true;
+                return open;
+            }
+        }
+
+        public byte[] Read()
+        {
+            lock (gate)
+            {
+                while (true)
+                {
+                    if (!open) throw new IOException("the fake source is closed");
+                    if (script.Count > 0)
+                    {
+                        object item = script.Dequeue();
+                        var ex = item as Exception;
+                        if (ex != null) throw ex;
+                        return (byte[])item;
+                    }
+                    Monitor.Wait(gate);
+                }
+            }
+        }
+
+        public void Close()
+        {
+            lock (gate) { Closes++; open = false; Monitor.PulseAll(gate); }
+        }
+    }
+
+    // SendInput stand-in: each Send is recorded as its steps in ButtonActions.Describe form, joined with ", ".
+    public class FakeInputSender : IInputSender
+    {
+        private readonly List<string> sends = new List<string>();
+        public bool Throw;
+
+        public int Count { get { lock (sends) return sends.Count; } }
+        public List<string> Sends { get { lock (sends) return new List<string>(sends); } }
+
+        public void Send(IList<InputStep> steps)
+        {
+            var parts = new List<string>();
+            foreach (InputStep s in steps) parts.Add(ButtonActions.DescribeStep(s));
+            lock (sends) sends.Add(string.Join(", ", parts));
+            if (Throw) throw new InvalidOperationException("SendInput failed");
+        }
     }
 
     // Service manager stand-in with state: start types, which services run, and injectable failures.

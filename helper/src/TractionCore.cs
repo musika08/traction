@@ -40,6 +40,7 @@ namespace Traction.Helper
             { "get_touchscreen", None },
             { "set_touchscreen", new[] { "enabled" } },
             { "set_bindings", new[] { "zone", "slots", "watch" } },
+            { "set_button_action", new[] { "action" } },
         };
 
         private static readonly string[] TopLevel = { "id", "cmd", "args" };
@@ -66,6 +67,10 @@ namespace Traction.Helper
         // Whether Windows still sees the gamepad (set_bindings' safety net). Set after construction; null means
         // set_bindings is not available.
         public IPadCheck PadCheck { get; set; }
+
+        // The Armoury Crate button reader (ButtonListener.cs). Set after construction; null means set_button_action is
+        // not available.
+        public ButtonListener ButtonListener { get; set; }
 
         public const string PadNotSeenMessage = "Windows does not see the gamepad, so the buttons were not changed.";
 
@@ -162,6 +167,7 @@ namespace Traction.Helper
                 case "get_touchscreen": return GetTouchscreen(id);
                 case "set_touchscreen": return SetTouchscreen(id, args);
                 case "set_bindings": return SetBindings(id, args);
+                case "set_button_action": return SetButtonAction(id, args);
             }
             return ProtocolKit.Reply(id, false, "Refused: unknown command '" + cmd + "'.", null);
         }
@@ -371,6 +377,28 @@ namespace Traction.Helper
             if (err != null)
                 return ProtocolKit.Reply(id, false, "The controller stopped responding and the factory reset failed: " + err, reset);
             return ProtocolKit.Reply(id, false, Bindings.ResetMessage, reset);
+        }
+
+        // ---------- Armoury Crate button ----------
+
+        // Sets the action the Armoury Crate button runs; the same action again is a no-op. Read only on the
+        // controller: the reader never writes to it.
+        private string SetButtonAction(object id, Dictionary<string, object> args)
+        {
+            object raw;
+            if (!args.TryGetValue("action", out raw)) return ProtocolKit.Reply(id, false, "Refused: 'action' is required.", null);
+            string action = raw as string;
+            if (action == null || ButtonActions.Steps(action) == null)
+            {
+                string shown = action ?? Convert.ToString(raw, System.Globalization.CultureInfo.InvariantCulture);
+                return ProtocolKit.Reply(id, false, "Refused: unknown button action '" + shown + "'.", null);
+            }
+            if (ButtonListener == null) return ProtocolKit.Reply(id, false, ControllerUnavailable, null);
+            ButtonListener.SetAction(action);
+            var d = new Dictionary<string, object>();
+            d["action"] = ButtonListener.Action;
+            d["running"] = ButtonListener.Running;
+            return ProtocolKit.Reply(id, true, "", d);
         }
 
         // ---------- touchscreen and foreground app ----------

@@ -27,6 +27,8 @@ namespace Traction.Helper
                 core.PadCheck = new XInputPadCheck();
                 core.SystemControls = new SystemControls();
                 core.ProductName = product;
+                // Waits on its own stop event (wait null), so choosing nothing ends the reader at once.
+                core.ButtonListener = new ButtonListener(new HidReportSource(), new Win32InputSender(), () => DateTime.UtcNow, null);
                 Run(input, output, core);
             }
             return 0;
