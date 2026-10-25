@@ -1,5 +1,7 @@
 # Traction Part B: Armoury Crate button (single press) Implementation Plan
 
+> **Superseded (2026-10-25)** by `2026-10-25-traction-library-button.md`: the live test showed `5A EC` comes from the Menu button; the Library button is a firmware press binding. Built as commits 42d6d34..f4b2aee; removed by the new plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A press of the Armoury Crate button (right side, below Menu) runs one action the owner picks in Traction's panel.
