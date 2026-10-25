@@ -84,3 +84,33 @@ running; nothing opened on any press.
   Crate setting (Library single = Task Manager) is a firmware key binding. Next: find the report that sets the
   Library binding (not one of zones 1-9), so Traction can write it like the other buttons. Part B's `5A EC` listener
   is wrong for this button and was set to Nothing on the device.
+
+## Library and Command Center press bindings (REA of GamepadCustomizePlugin.dll, 2026-10-25)
+
+Source: `X:\Projects\Armoury Crate\decompiled\GamepadCustomizePlugin.dll_all.c` (line numbers below), installed
+`C:\Program Files\ASUS\Armoury Crate SE Service\GamepadCustomizePlugin\GamepadCustomizePlugin.dll`, registry
+`HKCU\Software\ASUS\ARMOURY CRATE Service\GamepadCustomize`. Confirmed from code unless marked inferred; not yet
+written to the device by Traction.
+
+- Armoury does not read the Library button. It writes its short- and long-press actions into the controller; the
+  firmware times short vs long and produces the output (Ctrl+Shift+Esc on MI_03 for the owner's Task Manager).
+  GameInput is only used to detect external pads (FUN_180024440 / FUN_180024080 skip 0B05:1B4C).
+- Reports (report id 0x5A, 64 bytes, zero padded; FUN_18002c9d0 / FUN_18002cc30, sent by FUN_1800412a0 as SetFeature
+  on the same handle as the other `5A D1` commands):
+  - short press: `5A D1 1D 01 12` + Library short slot (9 bytes) + Command Center short slot (9 bytes)
+  - long press:  `5A D1 23 01 12` + Library long slot (9 bytes) + Command Center long slot (9 bytes)
+  - Both buttons share each report: Command Center's slots must be resent unchanged.
+  - Sent only when capability flag DAT_1800b94a9 has bit 2 (short) / 0x20 (long) (FUN_180053dd0, line 56835).
+    Armoury resends them on mode change and resume. `5A D1 0A` is a ready poll.
+- Slot encodings (FUN_180025db0, line 25472):
+  - firmware function: `05 00 <code> 00 00 00 00 00 00` (codes, lines 13490-13597): 0x19 touch keyboard, 0x1C show
+    desktop, 0x03 volume up, 0x02 volume down, 0x01 mic mute, 0x16 screen capture, 0x28 Controller Overview,
+    0x17 Command Center (`5A A6` + ATK 0xA6), 0x04 launch Armoury Crate (types F21), 0x26 Game Bar, 0x27 Xbox Library
+    (inferred ATK 0x93), 0x18 Game Library, 0x1A Task Manager, 0x25 Xbox button.
+  - key combo: `04 00 00 <n> k1 k2 k3 00 00` (PS/2 set-2 codes, modifiers 0x82 LWin, 0x88 LShift, 0x8A LAlt,
+    0x8C LCtrl), e.g. Task Manager `04 00 00 03 8C 88 76 00 00` (same scheme as Traction's 04-03-8C-88-76).
+  - single key: `04 00 00 01 <key> 00 00 00 00`.
+- Owner's live values: Library short = Task Manager combo, Library long = 0x28 Controller Overview, CC short = 0x17
+  Command Center, CC long = 0x04 Armoury Crate (F21). Installed defaults: short `05 00 27 | 05 00 17`, long
+  `05 00 16 | 05 00 04`.
+- Open: whether the slots survive a power cycle; what zeroed CC slots do.
