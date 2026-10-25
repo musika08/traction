@@ -242,7 +242,7 @@ def test_reapply_warns_when_the_pad_is_not_seen_or_reset(tmp_path):
         s = make(tmp_path, bindings=bindings.clean(CHOSEN))
         r = Reapplier(c, s, clock=Clock(), power_source=Power())
         await r.apply_all()
-        assert r.warning == PAD_NOT_SEEN and r.rerun is False   # not a transport failure: not retried
+        assert r.warning == PAD_NOT_SEEN and r.rerun is True    # nothing written: tried again at the next poll
         assert s.bindings == CHOSEN
         c.bindings_reply = "reset"
         await r.apply_all()
@@ -271,4 +271,98 @@ def test_reapply_reset_reply_reruns_with_the_owners_vibration(tmp_path):
         assert ("set_vibration", {"strength": 0}) in c.writes()
         assert [x for x in c.writes() if x[0] == "set_bindings"] == []
         assert r.rerun is False
+    run(go())
+
+
+# ---------- after wake: the controller (or the pad) is not back yet ----------
+
+def _waking_client(found):
+    """controller_info answers found=found[0], then found[1], ... (the last one from then on)."""
+    c = FakeClient()
+    answers = list(found)
+
+    async def info(args):
+        value = answers.pop(0) if len(answers) > 1 else answers[0]
+        return ok({"found": value, "pid": "0x1B4C", "xbox": False})
+    c.handlers["controller_info"] = info
+    return c
+
+
+def _triggered(tmp_path, c, **fields):
+    power = Power(True)
+    r = Reapplier(c, make(tmp_path, **fields), clock=Clock(), power_source=power)
+    r.prime()
+    power.value = False                    # the wake's trigger (AC off)
+    return r, power
+
+
+def test_controller_not_found_after_wake_is_retried(tmp_path):
+    async def go():
+        c = _waking_client([False, True])
+        r, _ = _triggered(tmp_path, c, bindings=bindings.clean(CHOSEN))
+        assert await r.tick() is True
+        assert c.writes() == [] and r.rerun is True
+        assert await r.tick() is True      # the next poll tries again: the controller is back
+        assert [x[0] for x in c.writes()] == ["set_controller_mode", "set_bindings", "set_bindings",
+                                              "set_vibration"]
+        assert r.rerun is False and r.warning == ""
+        assert await r.tick() is False
+    run(go())
+
+
+def test_pad_not_seen_after_wake_is_retried(tmp_path):
+    async def go():
+        c = _controller_client()
+        c.bindings_reply = "not_seen"
+        r, _ = _triggered(tmp_path, c, bindings=bindings.clean(CHOSEN))
+        assert await r.tick() is True
+        assert r.rerun is True
+        c.calls.clear()
+        c.bindings_reply = "ok"
+        assert await r.tick() is True
+        assert [x[0] for x in c.writes()] == ["set_controller_mode", "set_bindings", "set_bindings",
+                                              "set_vibration"]
+        assert r.rerun is False and r.warning == ""
+    run(go())
+
+
+def test_retries_stop_after_twelve_misses(tmp_path, caplog):
+    async def go():
+        c = _waking_client([False])
+        r, power = _triggered(tmp_path, c)
+        with caplog.at_level("INFO", logger="traction"):
+            runs = 0
+            while await r.tick():
+                runs += 1
+                assert runs <= 12
+        assert runs == 12 and r.rerun is False and c.writes() == []
+        gave_up = [x for x in caplog.records if x.levelname == "WARNING"]
+        assert len(gave_up) == 1 and "not found" in gave_up[0].getMessage()
+        assert await r.tick() is False
+        # A success resets the count; so does the next trigger.
+        power.value = True
+        assert await r.tick() is True and r.rerun is True
+    run(go())
+
+
+def test_success_resets_the_miss_count(tmp_path):
+    async def go():
+        c = _waking_client([False] * 11 + [True, False])
+        r, _ = _triggered(tmp_path, c)
+        for _ in range(12):                # 11 misses, then a write
+            assert await r.tick() is True
+        assert c.writes() and r.rerun is False
+        r.rerun = True                     # e.g. a later redo misses again: it is retried, not given up
+        assert await r.tick() is True and r.rerun is True
+    run(go())
+
+
+def test_old_overdrive_gets_no_retries(tmp_path):
+    async def go():
+        c = _waking_client([False])
+        r, _ = _triggered(tmp_path, c)
+        r.blocked = lambda: True
+        assert await r.tick() is True
+        assert r.rerun is False and c.writes() == [] and c.calls == []
+        assert await r.tick() is False
     run(go())

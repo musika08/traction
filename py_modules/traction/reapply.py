@@ -12,6 +12,13 @@ from .controls import apply_controller, transport_failure
 from .reapply_core import POLL, Dropped, ReapplierCore, _StepClient
 from .settings import Settings
 
+# After wake the controller (or Windows' view of the pad) can take a while to come back. A reapply that finds no
+# controller, or whose bindings write is refused because Windows does not see the pad, is tried again at the next
+# poll, at most this often in a row per trigger (12 x 5 s, about a minute).
+MISS_RETRIES = 12
+PAD_NOT_SEEN = "Windows does not see the gamepad"   # the helper's refusal before a watched bindings write
+NOT_FOUND = "The controller was not found, so its settings were not applied."
+
 
 class _TimedStepClient(_StepClient):
     """The shared _StepClient (same lock, generation and Armoury-busy checks) that also passes the call's timeout on:
@@ -45,18 +52,50 @@ class Reapplier(ReapplierCore):
         # main.py: True while an Overdrive older than 0.2.0 drives the controller (nothing is written then)
         self.blocked: Optional[Callable[[], bool]] = None
         self._reset_seen = False   # a reapply's bindings write ended in the helper's factory reset
+        self._missed = ""          # this reapply's pad-not-seen refusal (added to `warning`), else ""
+        self._retry_miss = False   # this reapply found no controller or the pad was not seen: retry at the next poll
+        self._misses = 0           # consecutive reapplies that missed since the last trigger or controller write
 
     async def apply_all(self) -> bool:
         """ReapplierCore.apply_all; after a factory reset by the helper (it wrote Gamepad and vibration 100) the next
         tick reapplies once more, which writes the stored mode and vibration and nothing custom (the bindings are
-        cleared by then). Set after the core's own rerun bookkeeping, which would clear it."""
+        cleared by then). A reapply that missed the controller (_note_miss) is retried the same way. Both are set after
+        the core's own rerun bookkeeping, which would clear them."""
         self._reset_seen = False
+        self._missed = ""
+        self._retry_miss = False
         try:
             return await super().apply_all()
         finally:
             if self._reset_seen:
                 self._reset_seen = False
                 self.rerun = True
+            if self._retry_miss:
+                self._retry_miss = False
+                self.rerun = True
+            if self._missed:   # shown in the panel (the pad-not-seen refusal was shown before the retries, too)
+                self.warning = " ".join(w for w in (self.warning, self._missed) if w)
+                self._missed = ""
+
+    def _triggers(self) -> "list[str]":
+        reasons = super()._triggers()
+        if reasons:   # a new trigger (resume, AC change, Armoury switched) gets its own run of retries
+            self._misses = 0
+        return reasons
+
+    def _note_miss(self, message: str, show: bool) -> None:
+        """Counts a reapply that could not reach the controller. Below MISS_RETRIES it is retried at the next poll
+        (logged as info); the last one logs one warning; after that nothing is retried until the next trigger.
+        `show`: the message also goes into the panel warning."""
+        self._misses += 1
+        if show:
+            self._missed = message
+        if self._misses < MISS_RETRIES:
+            self._retry_miss = True
+            self.log.info(f"{message} Trying again at the next poll ({self._misses}/{MISS_RETRIES})")
+        elif self._misses == MISS_RETRIES:
+            self.log.warning(f"{message} Gave up after {MISS_RETRIES} tries, until the next sleep, wake or AC "
+                             f"change.")
 
     def _blocked(self) -> bool:
         return bool(self.blocked is not None and self.blocked())
@@ -69,7 +108,7 @@ class Reapplier(ReapplierCore):
 
     async def _apply_steps(self, gen: int) -> "tuple[list[str], bool, bool]":
         problems = []
-        # No controller found means nothing to write.
+        # No controller found means nothing to write (just after wake: tried again at the next poll, see _note_miss).
         info = await self._step(gen, "controller_info", {})
         transport = transport_failure(info)
         data = info.get("data") if info.get("ok") else None
@@ -80,10 +119,17 @@ class Reapplier(ReapplierCore):
             transport |= step_client.transport
             if r.get("reset"):
                 self._reset_seen = True
+            warning = r.get("warning") or ""
             if r.get("ok"):
                 written = True
-                if r.get("warning"):   # the buttons were not written (pad not seen) or were reset
-                    problems.append(r["warning"])
+                if warning.startswith(PAD_NOT_SEEN) and not r.get("reset"):   # nothing written yet: try again
+                    self._note_miss(warning, show=True)
+                    return problems, transport, written
+                if warning:   # the buttons were reset
+                    problems.append(warning)
             else:
                 problems.append(r.get("message") or "The controller settings were not applied.")
+            self._misses = 0
+        elif not transport:   # just after wake the controller may not be back yet
+            self._note_miss(NOT_FOUND, show=False)
         return problems, transport, written
