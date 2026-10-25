@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { FaCheck, FaGamepad } from 'react-icons/fa';
 import {
   ARMOURY_BUSY,
-  ARMOURY_BUTTON_LABEL,
+  LIBRARY_LABEL,
   ARMOURY_DESCRIPTION,
   ARMOURY_LABEL,
   BACK_SECONDARY_LABEL,
@@ -33,8 +33,10 @@ import {
   TOUCH_TIMEOUT_TEXT,
   actionLabels,
   actionOptions,
-  armouryButtonNote,
-  armouryButtonOptions,
+  libraryNote,
+  libraryOptions,
+  librarySummary,
+  LibraryState,
   armouryChecked,
   armouryDisabled,
   backSwitchOn,
@@ -62,7 +64,7 @@ type State = {
   vibration: boolean;
   touchscreen: { found: boolean; enabled: boolean };
   buttons?: ButtonsState;
-  armoury_button?: string;
+  library?: LibraryState;
   blocked: string;
   note: string;
   busy: boolean;
@@ -78,7 +80,8 @@ const setTouchscreen = callable<[boolean], Result>('set_touchscreen');
 const setButton = callable<[string, string, string, string], Result>('set_button');
 const setBackSecondary = callable<['left' | 'right', boolean], Result>('set_back_secondary');
 const resetButton = callable<[string, string], Result>('reset_button');
-const setArmouryButton = callable<[string], Result>('set_armoury_button');
+const setLibraryPress = callable<['single' | 'long', string], Result>('set_library_press');
+const resetLibrary = callable<[], Result>('reset_library');
 const resetAllButtons = callable<[], Result>('reset_all_buttons');
 const setArmouryReplaced = callable<[boolean], Result>('set_armoury_replaced');
 
@@ -353,6 +356,106 @@ function ButtonRow(props: {
   );
 }
 
+// The Library button row: "Library button  Single / Long ▾". Pressing it expands, inline, a Single press picker and a
+// Long press picker and "Reset to factory". `disabled` (a change being written, or Armoury Crate running) greys what is
+// inside and the row's text.
+function LibraryRow(props: {
+  summary: string;
+  library: LibraryState;
+  open: boolean;
+  disabled: boolean;
+  onToggleOpen: () => void;
+  onPick: (press: 'single' | 'long', choice: string) => void;
+  onReset: () => void;
+}) {
+  const { summary, library, open, disabled } = props;
+  const rowRef = useRef<HTMLDivElement>(null);
+  const wasOpen = useRef(false);
+  const options = libraryOptions();
+
+  useEffect(() => {
+    if (!open && wasOpen.current) rowRef.current?.focus();
+    wasOpen.current = open;
+  }, [open]);
+
+  const cancel = (evt: CustomEvent) => {
+    const r = pressCancel(open);
+    if (!r.handled) return;
+    evt.preventDefault();
+    evt.stopPropagation();
+    props.onToggleOpen();
+  };
+
+  return (
+    <>
+      <PanelSectionRow>
+        <Focusable
+          ref={rowRef}
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '8px',
+            width: '100%',
+            boxSizing: 'border-box',
+            padding: '8px 10px',
+            borderRadius: '2px',
+            background: 'rgba(255, 255, 255, 0.06)',
+            color: disabled ? '#8b929a' : '#dcdedf',
+            fontSize: '14px',
+          }}
+          onActivate={props.onToggleOpen}
+          onClick={props.onToggleOpen}
+          onCancelButton={cancel}
+          onOKActionDescription={open ? 'Close' : 'Open'}
+        >
+          <span style={{ whiteSpace: 'nowrap', flex: '0 1 auto', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {LIBRARY_LABEL}
+          </span>
+          <span
+            style={{
+              color: disabled ? '#8b929a' : '#ffffff',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {summary + (open ? ' ▴' : ' ▾')}
+          </span>
+        </Focusable>
+      </PanelSectionRow>
+      {open && (
+        <>
+          <PanelSectionRow>
+            <InlinePicker
+              label="Single press"
+              options={options}
+              value={library.single}
+              disabled={disabled}
+              onChange={(v) => props.onPick('single', v)}
+            />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <InlinePicker
+              label="Long press"
+              options={options}
+              value={library.long}
+              disabled={disabled}
+              onChange={(v) => props.onPick('long', v)}
+            />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={disabled} onClick={props.onReset}>
+              {RESET_BUTTON_LABEL}
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
+      )}
+    </>
+  );
+}
+
 function Content() {
   const [support, setSupport] = useState<Support | null>(null);
   const [startError, setStartError] = useState('');
@@ -366,6 +469,7 @@ function Content() {
   // mode on the pad does not move it while editing) and the button row that is expanded.
   const [pickedSet, setPickedSet] = useState<string | null>(null);
   const [openButton, setOpenButton] = useState<string | null>(null);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const mounted = useRef(true);
 
   const setStatus = (key: string, r: Result, okText = 'Applied.') => {
@@ -561,6 +665,8 @@ function Content() {
   const editSet = pickedSet ?? buttons?.live ?? 'gamepad';
   const collapsedButtons = buttonsCollapsed(state.blocked, unavailable);
   if (collapsedButtons && openButton !== null) setOpenButton(null);
+  if (collapsedButtons && libraryOpen) setLibraryOpen(false);
+  const libraryLabels = Object.fromEntries(libraryOptions().map((o) => [o.data, o.label]));
 
   const toggleArmoury = () => {
     if (armouryPending) return;
@@ -688,16 +794,20 @@ function Content() {
               />
             );
           })}
-          <PanelSectionRow>
-            <InlinePicker
-              label={ARMOURY_BUTTON_LABEL}
-              options={armouryButtonOptions()}
-              value={state.armoury_button ?? 'nothing'}
-              disabled={disabled}
-              onChange={(v) => run('buttons', () => setArmouryButton(v))}
-            />
-          </PanelSectionRow>
-          <Note text={armouryButtonNote(state.armoury_button)} />
+          {state.library && (
+            <>
+              <LibraryRow
+                summary={librarySummary(state.library, libraryLabels)}
+                library={state.library}
+                open={libraryOpen && !collapsedButtons}
+                disabled={controllerDisabled || !state.library.allowed}
+                onToggleOpen={() => setLibraryOpen((o) => !o && !collapsedButtons)}
+                onPick={(press, choice) => run('buttons', () => setLibraryPress(press, choice))}
+                onReset={() => run('buttons', () => resetLibrary())}
+              />
+              <Note text={libraryNote(state.library)} />
+            </>
+          )}
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={controllerDisabled} onClick={() => run('buttons', () => resetAllButtons())}>
               {RESET_ALL_LABEL}

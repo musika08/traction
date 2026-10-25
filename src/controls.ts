@@ -235,25 +235,54 @@ export function secondaryNote(state: { m1_secondary?: boolean; m2_secondary?: bo
   return state.m1_secondary || state.m2_secondary ? '' : SECONDARY_NOTE;
 }
 
-// ---------- Armoury Crate button ----------
+// ---------- Library button ----------
 
-export const ARMOURY_BUTTON_LABEL = 'Armoury Crate button';
-export const ARMOURY_BUTTON_NOTE =
-  "If Armoury Crate also has an action for this button, both run. Set it to nothing in Armoury Crate's Shortcuts & Key Binding.";
+export const LIBRARY_LABEL = 'Library button';
+export const LIBRARY_ARMOURY_LABEL = 'Armoury Crate setting';
+export const LIBRARY_NOTE =
+  'Armoury Crate is running, so its Library setting applies. Turn on Use Traction instead of Armoury Crate to change it here.';
 
-// Ids as in the backend's armoury_button.ACTIONS (no gamepad buttons, no touch keyboard); labels from ACTIONS.
-const ARMOURY_BUTTON_IDS = [
-  'nothing', 'mouse_left', 'mouse_right', 'mouse_middle', 'scroll_up', 'scroll_down', 'esc', 'enter', 'tab',
-  'backspace', 'space', 'up', 'down', 'left', 'right', 'page_up', 'page_down', 'win', 'show_desktop', 'screenshot',
-  'task_manager', 'close_window', 'alt_tab', 'win_tab', 'volume_up', 'volume_down',
+// Ids as in the backend's library.CHOICES: the Armoury Crate setting first, then the ASUS actions, then keys and
+// shortcuts (labels of the keys from ACTIONS).
+const LIBRARY_ASUS: { data: string; label: string }[] = [
+  { data: 'asus_show_desktop', label: 'Show desktop' },
+  { data: 'asus_task_manager', label: 'Task Manager' },
+  { data: 'asus_screen_capture', label: 'Screen capture' },
+  { data: 'asus_volume_up', label: 'Volume up' },
+  { data: 'asus_volume_down', label: 'Volume down' },
+  { data: 'asus_mic_mute', label: 'Mic mute' },
+  { data: 'asus_touch_keyboard', label: 'Touch keyboard' },
+  { data: 'asus_game_bar', label: 'Game Bar' },
+  { data: 'asus_xbox_library', label: 'Xbox Library' },
+  { data: 'asus_controller_overview', label: 'Controller Overview' },
+  { data: 'asus_launch_armoury', label: 'Launch Armoury Crate' },
+];
+const LIBRARY_KEY_IDS = [
+  'esc', 'enter', 'tab', 'backspace', 'space', 'up', 'down', 'left', 'right', 'page_up', 'page_down', 'win',
+  'close_window', 'alt_tab', 'win_tab',
 ];
 
-export function armouryButtonOptions(): { data: string; label: string }[] {
+export function libraryOptions(): { data: string; label: string }[] {
   const labels = actionLabels();
-  return ARMOURY_BUTTON_IDS.map((id) => ({ data: id, label: labels[id] ?? id }));
+  return [
+    { data: 'armoury', label: LIBRARY_ARMOURY_LABEL },
+    ...LIBRARY_ASUS,
+    ...LIBRARY_KEY_IDS.map((id) => ({ data: id, label: labels[id] ?? id })),
+  ];
 }
 
-// The note shows only while an action is set.
-export function armouryButtonNote(action: string | undefined): string {
-  return !action || action === 'nothing' ? '' : ARMOURY_BUTTON_NOTE;
+export type LibraryState = { single: string; long: string; allowed: boolean; note?: string };
+
+// "Single press / Long press" choices, each by its label.
+export function librarySummary(
+  lib: { single?: string; long?: string } | undefined,
+  labels: Record<string, string>,
+): string {
+  const one = (id: string | undefined) => labels[id ?? 'armoury'] ?? id ?? LIBRARY_ARMOURY_LABEL;
+  return one(lib?.single) + ' / ' + one(lib?.long);
+}
+
+// Shown under the row only while Armoury Crate is running (the row is greyed then).
+export function libraryNote(lib: { allowed?: boolean } | undefined): string {
+  return lib && lib.allowed === false ? LIBRARY_NOTE : '';
 }

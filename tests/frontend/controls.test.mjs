@@ -23,9 +23,11 @@ import {
   controllerModeDescription,
   touchscreenCheck,
   keepPickedSet,
-  ARMOURY_BUTTON_LABEL,
-  armouryButtonOptions,
-  armouryButtonNote,
+  LIBRARY_LABEL,
+  LIBRARY_NOTE,
+  libraryOptions,
+  librarySummary,
+  libraryNote,
 } from '../../src/controls.ts';
 import { rowValue, pressRow, choose, pressCancel, focusIndex } from '../../src/picker.ts';
 
@@ -180,19 +182,27 @@ test('nextOpen toggles a row, and never opens one while collapsed', () => {
   assert.equal(nextOpen('a', 'a', true), null);
 });
 
-test('Armoury Crate button label, options and note', () => {
-  assert.equal(ARMOURY_BUTTON_LABEL, 'Armoury Crate button');
-  const ids = ['nothing', 'mouse_left', 'mouse_right', 'mouse_middle', 'scroll_up', 'scroll_down', 'esc', 'enter', 'tab',
-    'backspace', 'space', 'up', 'down', 'left', 'right', 'page_up', 'page_down', 'win', 'show_desktop', 'screenshot',
-    'task_manager', 'close_window', 'alt_tab', 'win_tab', 'volume_up', 'volume_down'];
-  const labels = actionLabels();
-  const opts = armouryButtonOptions();
+test('Library button label, options, summary and note', () => {
+  assert.equal(LIBRARY_LABEL, 'Library button');
+  const ids = ['armoury', 'asus_show_desktop', 'asus_task_manager', 'asus_screen_capture', 'asus_volume_up',
+    'asus_volume_down', 'asus_mic_mute', 'asus_touch_keyboard', 'asus_game_bar', 'asus_xbox_library',
+    'asus_controller_overview', 'asus_launch_armoury', 'esc', 'enter', 'tab', 'backspace', 'space', 'up', 'down',
+    'left', 'right', 'page_up', 'page_down', 'win', 'close_window', 'alt_tab', 'win_tab'];
+  const labels = ['Armoury Crate setting', 'Show desktop', 'Task Manager', 'Screen capture', 'Volume up', 'Volume down',
+    'Mic mute', 'Touch keyboard', 'Game Bar', 'Xbox Library', 'Controller Overview', 'Launch Armoury Crate', 'Esc',
+    'Enter', 'Tab', 'Backspace', 'Space', 'Up arrow', 'Down arrow', 'Left arrow', 'Right arrow', 'Page Up',
+    'Page Down', 'Windows key', 'Close window', 'Alt+Tab', 'Win+Tab'];
+  const opts = libraryOptions();
   assert.deepEqual(opts.map((o) => o.data), ids);
-  assert.deepEqual(opts.map((o) => o.label), ids.map((i) => labels[i]));
-  assert.equal(opts[0].label, 'Nothing');
-  assert.equal(armouryButtonNote('nothing'), '');
-  assert.equal(
-    armouryButtonNote('task_manager'),
-    "If Armoury Crate also has an action for this button, both run. Set it to nothing in Armoury Crate's Shortcuts & Key Binding.",
-  );
+  assert.deepEqual(opts.map((o) => o.label), labels);
+  const l = Object.fromEntries(opts.map((o) => [o.data, o.label]));
+  assert.equal(librarySummary({ single: 'asus_show_desktop', long: 'esc' }, l), 'Show desktop / Esc');
+  assert.equal(librarySummary({ single: 'armoury', long: 'armoury' }, l), 'Armoury Crate setting / Armoury Crate setting');
+  assert.equal(librarySummary(undefined, l), 'Armoury Crate setting / Armoury Crate setting');
+  const copy =
+    'Armoury Crate is running, so its Library setting applies. Turn on Use Traction instead of Armoury Crate to change it here.';
+  assert.equal(LIBRARY_NOTE, copy);
+  assert.equal(libraryNote({ allowed: false }), copy);
+  assert.equal(libraryNote({ allowed: true }), '');
+  assert.equal(libraryNote(undefined), '');
 });
