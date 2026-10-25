@@ -66,3 +66,9 @@ running; nothing opened on any press.
   from the start of a long hold until that time has passed. (One stray F22, vk 0x85 scan 0x6D, came in a run where
   the owner pressed a different button; not reproduced.)
 - Back button + Command Center: not tested.
+- **Part B live test (2026-10-25, Armoury Crate services stopped, Traction listening for `5A EC`):** the button's output
+  changes between runs. Run A (5 presses): 3 x `5A EC` (Traction sent its keys each time, Task Manager opened each
+  time) and 2 x a plain left Ctrl key (vk 0xA2, not injected) on the keyboard interface. Run B (5 presses, Big Picture
+  in front, action Volume up): no `5A EC` at all; 6 x a plain left Alt (vk 0xA4, sysdown, not injected, held 0.2-0.75 s
+  like the press) and 1 x left Ctrl. No ASUS firmware (AsusAtkWmiEvent) event for any press. With Armoury Crate
+  running it opened its own Task Manager about 1.6 s before `5A EC`. Cause of the switching unknown.
