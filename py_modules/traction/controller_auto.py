@@ -20,7 +20,9 @@ docs/specs/2026-10-24-overdrive-controls-design.md sections 3.3, 4 and 5.2.
   so a missing controller is not searched for (every HID device listed) at every tick.
 - An error inside the loop is logged (once a minute at most), Gamepad is written and the loop goes on.
 - Every mode write that lands is followed, under the same lock, by the button zones for that mode
-  (controls.apply_bindings: the zones with a choice in either set plus the touched ones, from that mode's set).
+  (controls.apply_bindings: the zones with a choice in either set plus the touched ones, from that mode's set), then
+  by the Library button's reports (controls.apply_press_bindings, with the reapplier's allowed and replaced checks):
+  a mode switch makes the controller forget them.
 - stop() writes Gamepad, or Desktop when its optional mode callable (evaluated under the reapplier's lock, so a
   choice made while stop() waited is honoured) returns Desktop. It rewrites the button zones only when Desktop was
   the mode last written or is the one it writes (only then do the zones hold, or need, Desktop codes).
@@ -32,7 +34,7 @@ import logging
 import time
 from typing import Callable, Optional
 
-from .controls import apply_bindings
+from .controls import apply_bindings, apply_press_bindings
 from .sampling import ERROR_LOG_EVERY, PERIOD, SAMPLE_TIMEOUT, _finite
 
 STEAM_EXES = ("steam.exe", "steamwebhelper.exe")
@@ -208,10 +210,11 @@ class ControllerAuto:
             self.log.warning(f"Controller Auto could not set {mode}: {r.get('message')}")
 
     async def _write_bindings(self, mode: str) -> None:
-        """The changed button zones for the mode just written (called under the reapplier's lock). A failure is
-        logged by apply_bindings (once per kind); the mode stays written. A factory reset by the helper (the pad went
-        away) is shown with the reapplier's warning, and the next reapply tick writes the mode and vibration again
-        (the factory set wrote Gamepad and vibration 100)."""
+        """The changed button zones for the mode just written, then the Library button's reports (called under the
+        reapplier's lock). A failure is logged by apply_bindings / apply_press_bindings (once per kind); the mode stays
+        written. A factory reset by the helper (the pad went away) is shown with the reapplier's warning, and the next
+        reapply tick writes the mode and vibration again (the factory set wrote Gamepad and vibration 100). The Library
+        reports are skipped when the helper did not answer the zones write (it would fail the same way)."""
         rp = self.reapplier
         settings = getattr(rp, "settings", None)
         blocked = getattr(rp, "_blocked", None)
@@ -222,6 +225,12 @@ class ControllerAuto:
             rp.rerun = True
             if b.get("message"):
                 rp.warning = " ".join(w for w in (rp.warning, b["message"]) if w)
+        if b.get("transport"):
+            return
+        allowed = getattr(rp, "_library_allowed", None)
+        replaced = getattr(rp, "_library_replaced", None)
+        await apply_press_bindings(self.client, settings, bool(allowed is None or allowed()), logger=self.log,
+                                   replaced=bool(replaced is not None and replaced()))
 
     # ---------- loop ----------
 

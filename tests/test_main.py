@@ -1779,10 +1779,76 @@ def test_reset_library_writes_once_then_stops(tmp_path):
         assert press_calls(c) == [("set_press_bindings", DEFAULT_PRESS)]
         saved = Settings.load(s.path)
         assert saved.library == {"single": "armoury", "long": "armoury"} and saved.library_written is False
+        # Traction replaced Armoury Crate: its setting is written on every reapply (nobody else rewrites it)
         c.calls.clear()
         await wait(p.reapplier.apply_all())
         await wait(p.reapplier.apply_all())
-        assert press_calls(c) == []
+        assert press_calls(c) == [("set_press_bindings", DEFAULT_PRESS)] * 2
+    run(go())
+
+
+def test_reset_library_not_installed_writes_once_then_stops(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, user_set=True)
+        c.handlers["armoury_state"] = reply(ok({"installed": False, "startTypes": {}, "running": []}))
+        controller_found(c)
+        assert (await wait(p.set_library_press("long", "esc")))["ok"]
+        assert len(press_calls(c)) == 1
+        c.calls.clear()
+        assert (await wait(p.reset_library())) == {"ok": True, "message": ""}
+        assert press_calls(c) == [("set_press_bindings", DEFAULT_PRESS)]
+        c.calls.clear()
+        await wait(p.reapplier.apply_all())
+        await wait(p.reapplier.apply_all())
+        assert press_calls(c) == [] and controller_writes(c) != []
+    run(go())
+
+
+def test_controller_mode_switch_rewrites_the_library_button(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, armoury_replaced=True, library={"single": "esc", "long": "armoury"})
+        controller_found(c)
+        assert (await wait(p.set_controller_mode("desktop"))) == {"ok": True, "message": ""}
+        cmds = [x[0] for x in c.writes()]
+        assert cmds[0] == "set_controller_mode" and cmds[-1] == "set_press_bindings"
+        assert len(press_calls(c)) == 1
+        assert press_calls(c)[0][1]["single"][0] == "04-00-00-01-76-00-00-00-00"   # Esc
+        # Armoury Crate running (installed, not replaced): the mode is written, the Library button is not
+        p2, c2, s2 = plugin_with(tmp_path / "b", library={"single": "esc", "long": "esc"}, library_written=True)
+        controller_found(c2)
+        await p2.armoury.check_installed()
+        assert (await wait(p2.set_controller_mode("desktop")))["ok"]
+        assert ("set_controller_mode", {"mode": "desktop"}) in c2.calls and press_calls(c2) == []
+    run(go())
+
+
+def test_handing_back_to_armoury_writes_its_setting_first(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, armoury_replaced=True, armoury_recorded={"ArmouryCrateService": "Automatic"},
+                              library={"single": "esc", "long": "win"}, library_written=True)
+        controller_found(c)
+        r = await wait(p.set_armoury_replaced(False))
+        assert r["ok"] is True, r
+        cmds = [x[0] for x in c.writes()]
+        assert cmds == ["set_press_bindings", "armoury_restore"]
+        assert press_calls(c) == [("set_press_bindings", DEFAULT_PRESS)]
+        saved = Settings.load(s.path)
+        assert saved.library == {"single": "esc", "long": "win"} and saved.library_written is False
+        assert saved_record(tmp_path).replaced is False
+        # a failed write never blocks switching Armoury Crate back on
+        p2, c2, s2 = plugin_with(tmp_path / "b", armoury_replaced=True,
+                                 armoury_recorded={"ArmouryCrateService": "Automatic"},
+                                 library={"single": "esc", "long": "armoury"})
+        c2.handlers["set_press_bindings"] = reply(fail("Controller not found"))
+        r = await wait(p2.set_armoury_replaced(False))
+        assert r["ok"] is True, r
+        assert [x[0] for x in c2.writes()] == ["set_press_bindings", "armoury_restore"]
+        assert saved_record(tmp_path / "b").replaced is False
+        # nothing written by Traction: no Library write before the restore
+        p3, c3, s3 = plugin_with(tmp_path / "c", armoury_replaced=True,
+                                 armoury_recorded={"ArmouryCrateService": "Automatic"})
+        assert (await wait(p3.set_armoury_replaced(False)))["ok"]
+        assert press_calls(c3) == [] and "armoury_restore" in [x[0] for x in c3.calls]
     run(go())
 
 

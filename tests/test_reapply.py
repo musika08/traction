@@ -454,3 +454,34 @@ def test_reapply_reports_a_press_bindings_refusal(tmp_path):
         await r.apply_all()
         assert r.warning == "Refused: unknown press binding 'x'."
     run(go())
+
+
+def test_reapply_writes_armoury_setting_every_time_while_replaced(tmp_path):
+    """Traction replaced Armoury Crate: nobody else rewrites the reports after sleep, so Armoury Crate's own setting
+    is written on every reapply even with both presses on it."""
+    async def go():
+        c = _controller_client()
+        s = make(tmp_path)                       # both presses "armoury", nothing pending
+        r = Reapplier(c, s, clock=Clock(), power_source=Power())
+        r.library_allowed = lambda: True
+        r.library_replaced = lambda: True
+        await r.apply_all()
+        await r.apply_all()
+        assert press_calls(c) == [("set_press_bindings", {
+            "single": ["05-00-27-00-00-00-00-00-00", "05-00-17-00-00-00-00-00-00"],
+            "long": ["05-00-16-00-00-00-00-00-00", "05-00-04-00-00-00-00-00-00"]})] * 2
+        assert s.library_written is False
+    run(go())
+
+
+def test_reapply_no_write_when_armoury_not_installed_and_nothing_chosen(tmp_path):
+    async def go():
+        c = _controller_client()
+        s = make(tmp_path)
+        r = Reapplier(c, s, clock=Clock(), power_source=Power())
+        r.library_allowed = lambda: True         # not installed: allowed
+        r.library_replaced = lambda: False
+        await r.apply_all()
+        await r.apply_all()
+        assert press_calls(c) == [] and c.writes() != []
+    run(go())

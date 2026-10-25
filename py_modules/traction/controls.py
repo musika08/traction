@@ -190,19 +190,21 @@ async def apply_bindings(client, settings: Settings, mode: str, logger: Optional
 
 
 async def apply_press_bindings(client, settings: Settings, allowed: bool, read=None,
-                               logger: Optional[logging.Logger] = None) -> dict:
+                               logger: Optional[logging.Logger] = None, replaced: bool = False) -> dict:
     """The Library button's single and long press reports (helper set_press_bindings), with Armoury Crate's setting
     for every "armoury" press and always for Command Center (`read`: the registry reader, library.armoury_ids).
 
-    No call when not `allowed` (Armoury Crate is running, or an old Overdrive drives the controller), nor when both
-    presses are "armoury" and settings.library_written is False. Both "armoury" with library_written True is the
-    restore after a Reset: written once, then library_written goes False. A choice sets library_written True even when
-    its write failed (it may have landed). library_written is saved when it changes. `written` is True when the
-    reports were sent and accepted."""
+    No call when not `allowed` (Armoury Crate is running, or an old Overdrive drives the controller). While Traction
+    has `replaced` Armoury Crate the reports are written on every call, even with both presses on "armoury" (they
+    carry Armoury Crate's own setting: nobody else rewrites them after sleep or a mode switch). Otherwise (Armoury
+    Crate not installed) no call when both presses are "armoury" and settings.library_written is False; both "armoury"
+    with library_written True is the restore after a Reset: written once, then library_written goes False. A choice
+    sets library_written True even when its write failed (it may have landed). library_written is saved when it
+    changes. `written` is True when the reports were sent and accepted."""
     if not allowed:
         return _result(True, "", written=False)
     want = library.chosen(settings.library)
-    if not want and not settings.library_written:
+    if not want and not settings.library_written and not replaced:
         return _result(True, "", written=False)
     args = library.slots(settings.library, library.armoury_ids(read))
     r = await client.call("set_press_bindings", args)
@@ -222,6 +224,28 @@ async def apply_press_bindings(client, settings: Settings, allowed: bool, read=N
             _press_logged.add(message)
             (logger or logging.getLogger("traction")).warning(f"Library button: not written: {message}")
         return _result(False, message, written=False, transport=transport_failure(r))
+    _press_logged.clear()
+    return _result(True, "", written=True)
+
+
+async def restore_press_bindings(client, settings: Settings, read=None,
+                                 logger: Optional[logging.Logger] = None) -> dict:
+    """Before Armoury Crate is switched back on: both reports once with Armoury Crate's own setting (the stored
+    choices are left as they are), so the Library button does what Armoury Crate says until it rewrites them itself.
+    A landed write sets library_written False (saved); a failure is logged and reported, never raised."""
+    args = library.slots(library.default_library(), library.armoury_ids(read))
+    r = await client.call("set_press_bindings", args)
+    log = logger or logging.getLogger("traction")
+    if not r.get("ok"):
+        message = _msg(r, "The Library button was not given back to Armoury Crate.")
+        log.warning(f"Library button: Armoury Crate's setting not written before switching it back on: {message}")
+        return _result(False, message, written=False, transport=transport_failure(r))
+    if settings.library_written:
+        settings.library_written = False
+        try:
+            settings.save()
+        except OSError as e:
+            log.error(f"Could not save the Library button state: {e}")
     _press_logged.clear()
     return _result(True, "", written=True)
 

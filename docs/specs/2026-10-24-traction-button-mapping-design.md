@@ -96,13 +96,22 @@ press with no delay.
   `04 00 00 <n> k1 k2 k3 00 00` (PS/2 set-2 codes, the same scheme as the other buttons).
 - "Armoury Crate setting" is read from `HKCU\Software\ASUS\ARMOURY CRATE Service\GamepadCustomize`
   (`LibBtnSFunctId`, `LibBtnLFunctId`, `CCBtnSFunctId`, `CCBtnLFunctId`) and turned into a slot the way Armoury Crate
-  does (ids 1-12 ASUS actions, 0x21-0x2A shortcuts, above 0x60 a single key). An id Traction can't translate, or a
-  missing value, falls back to Armoury Crate's installed defaults (single: Xbox Library / Command Center; long:
-  Screen capture / Launch Armoury Crate).
-- Written when the owner changes it and on every reapply (start, wake, mode switch, Armoury switched), only while
-  Armoury Crate is not running and only once the owner has chosen something other than Armoury Crate setting for
-  either press (otherwise Traction never sends these reports). New helper command `set_press_bindings {short, long}`
-  (two 18-byte slot pairs, allow-listed codes only).
+  does (ids 1-12 ASUS actions, 0x21-0x2A shortcuts). Ids above 0x60 (single keys in Armoury Crate) fall back to the
+  defaults for now, since their key encoding is not known yet. An id Traction can't translate, or a missing value,
+  falls back to Armoury Crate's installed defaults (single: Xbox Library / Command Center; long: Screen capture /
+  Launch Armoury Crate).
+- Written when the owner changes it and on every reapply (start, wake, Armoury switched) and every controller mode
+  write (panel or Auto), never while Armoury Crate is running:
+  - While Traction has replaced Armoury Crate (Use Traction instead of Armoury Crate is on), on every one of those
+    writes, even with both presses on Armoury Crate setting: the reports then carry Armoury Crate's own setting from
+    the registry, because nobody else rewrites them after sleep or a mode switch.
+  - When Armoury Crate is not installed, only once the owner has chosen something other than Armoury Crate setting
+    for either press; after a Reset back to Armoury Crate setting it is written once more, then no more (otherwise
+    Traction never sends these reports).
+  - Handing back to Armoury Crate (the switch turned off): when Traction wrote the reports, it writes Armoury Crate's
+    own setting once before Armoury Crate is switched back on (the stored choices are kept). A failed write is logged
+    and does not stop the switch.
+  New helper command `set_press_bindings {short, long}` (two 18-byte slot pairs, allow-listed codes only).
 - Before the build relies on it, a device check: send the owner's own Armoury Crate values back and confirm the
   Library button still opens Task Manager and Command Center still works; then one changed value.
 - **Replaces the first Part B:** the `5A EC` reader, `set_button_action`, the 5 s loop and the `armoury_button`

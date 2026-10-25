@@ -58,6 +58,9 @@ class Reapplier(ReapplierCore):
         # main.py: True while the Library button reports may be written (Armoury Crate is not running and no old
         # Overdrive drives the controller). None: allowed (no Armoury Crate switch to ask).
         self.library_allowed: Optional[Callable[[], bool]] = None
+        # main.py: True while Traction has replaced Armoury Crate (the reports are then written on every reapply, even
+        # with Armoury Crate's own setting on both presses). None: not replaced.
+        self.library_replaced: Optional[Callable[[], bool]] = None
         self._reset_seen = False   # a reapply's bindings write ended in the helper's factory reset
         self._missed = ""          # this reapply's pad-not-seen refusal (added to `warning`), else ""
         self._retry_miss = False   # this reapply found no controller or the pad was not seen: retry at the next poll
@@ -132,6 +135,9 @@ class Reapplier(ReapplierCore):
     def _library_allowed(self) -> bool:
         return bool(self.library_allowed is None or self.library_allowed())
 
+    def _library_replaced(self) -> bool:
+        return bool(self.library_replaced is not None and self.library_replaced())
+
     def _should_apply(self) -> bool:
         return self.settings.user_set and not self._blocked()
 
@@ -151,7 +157,8 @@ class Reapplier(ReapplierCore):
             transport |= step_client.transport
             if not step_client.transport:
                 # The controller forgets the Library button's reports on sleep: rewritten every time while chosen.
-                lib = await apply_press_bindings(step_client, self.settings, self._library_allowed(), logger=self.log)
+                lib = await apply_press_bindings(step_client, self.settings, self._library_allowed(), logger=self.log,
+                                                 replaced=self._library_replaced())
                 transport |= step_client.transport
                 if not lib.get("ok"):
                     problems.append(lib.get("message") or "The Library button was not applied.")

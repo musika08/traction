@@ -282,7 +282,8 @@ export function librarySummary(
   return one(lib?.single) + ' / ' + one(lib?.long);
 }
 
-// Shown under the row only while Armoury Crate is running (the row is greyed then).
-export function libraryNote(lib: { allowed?: boolean } | undefined): string {
-  return lib && lib.allowed === false ? LIBRARY_NOTE : '';
+// The backend's note, shown under the row only while it is greyed: LIBRARY_NOTE while Armoury Crate is running,
+// nothing while an old Overdrive drives the controller (the panel's update note says why then).
+export function libraryNote(lib: { allowed?: boolean; note?: string } | undefined): string {
+  return lib && lib.allowed === false ? (lib.note ?? '') : '';
 }

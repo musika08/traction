@@ -202,7 +202,10 @@ test('Library button label, options, summary and note', () => {
   const copy =
     'Armoury Crate is running, so its Library setting applies. Turn on Use Traction instead of Armoury Crate to change it here.';
   assert.equal(LIBRARY_NOTE, copy);
-  assert.equal(libraryNote({ allowed: false }), copy);
-  assert.equal(libraryNote({ allowed: true }), '');
+  // the backend's note: the Armoury Crate copy while it runs, nothing while an old Overdrive greys the row
+  assert.equal(libraryNote({ allowed: false, note: copy }), copy);
+  assert.equal(libraryNote({ allowed: false, note: '' }), '');
+  assert.equal(libraryNote({ allowed: false }), '');
+  assert.equal(libraryNote({ allowed: true, note: copy }), '');
   assert.equal(libraryNote(undefined), '');
 });

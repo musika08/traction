@@ -126,6 +126,7 @@ class Plugin:
             reapplier.busy_check = self._busy
             reapplier.blocked = lambda: self._old
             reapplier.library_allowed = self._library_allowed
+            reapplier.library_replaced = self._library_replaced
             if client is not None:
                 # Traction has no Auto TDP: the loop asks frame_sample itself.
                 self.controller_auto = ControllerAuto(client, reapplier, None, logger=decky.logger)
@@ -347,6 +348,13 @@ class Plugin:
                         result = _fail(str(r.get("message") or "The controller mode was not changed."))
                     else:
                         note = str(r.get("warning") or "")   # the buttons were not written, or were reset
+                        # A mode switch makes the controller forget the Library button's reports: written again
+                        # under the same lock, with the reapplier's checks.
+                        lib = await controls.apply_press_bindings(self.client, s, self._library_allowed(),
+                                                                  logger=decky.logger,
+                                                                  replaced=self._library_replaced())
+                        if not lib.get("ok"):
+                            note = " ".join(m for m in (note, str(lib.get("message") or "")) if m)
                 else:
                     note = NO_CONTROLLER
                 if result is None:
@@ -535,6 +543,11 @@ class Plugin:
             return True
         return bool(a.replaced() or getattr(a, "_installed", None) is False)
 
+    def _library_replaced(self) -> bool:
+        """Traction has replaced Armoury Crate: the reports are written on every reapply and mode write, even with
+        Armoury Crate's own setting on both presses (nobody else rewrites them after sleep)."""
+        return bool(self.armoury is not None and self.armoury.replaced())
+
     def _library_state(self, s, allowed: bool) -> dict:
         lib = library.clean(s.library)
         running = not allowed and self.client is not None and not self._old
@@ -558,7 +571,8 @@ class Plugin:
             if self._library_allowed():
                 if await self._controller_found():
                     s.library = new
-                    r = await controls.apply_press_bindings(self.client, s, True, logger=decky.logger)
+                    r = await controls.apply_press_bindings(self.client, s, True, logger=decky.logger,
+                                                            replaced=self._library_replaced())
                     if not r.get("ok"):
                         s.library = old
                         self._save()
@@ -618,7 +632,27 @@ class Plugin:
                 await self.armoury.on_load()
             elif self._overdrive_record_pending():
                 return _fail(MOVE_FAILED)
+        if not on:
+            await self._give_library_back()
         return await self.armoury.set(on)
+
+    async def _give_library_back(self) -> None:
+        """Before Armoury Crate is switched back on: when Traction wrote the Library button's reports (a choice, or a
+        restore still pending), they are written once with Armoury Crate's own setting, so the button does what
+        Armoury Crate says before it rewrites them itself. The stored choices stay (they apply again if Traction
+        replaces Armoury Crate later). A failed write is logged and never blocks the switch."""
+        s = self.settings
+        if s is None or self.armoury is None or not self.armoury.replaced():
+            return
+        if not (s.library_written or library.chosen(s.library)):
+            return
+        async with self.reapplier.user_change():
+            if self._busy():
+                return
+            try:
+                await controls.restore_press_bindings(self.client, s, logger=decky.logger)
+            except Exception:
+                decky.logger.exception("Library button: giving it back to Armoury Crate failed")
 
     def _overdrive_installed(self) -> bool:
         return find_overdrive(self._plugins_dir or plugins_dir()) is not None

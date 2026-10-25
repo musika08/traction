@@ -542,3 +542,45 @@ def test_press_bindings_failure(tmp_path):
         r = await controls.apply_press_bindings(c, s, True, read=owner_registry)
         assert r["ok"] is False and s.library_written is True
     run(go())
+
+
+def test_press_bindings_written_every_time_while_replaced(tmp_path):
+    """Traction replaced Armoury Crate: its own setting (from the registry) is written on every call, even with both
+    presses on it and nothing pending."""
+    async def go():
+        c = FakeClient()
+        s = settings(tmp_path)
+        armoury = {"single": ["04-00-00-03-8C-88-76-00-00", "05-00-17-00-00-00-00-00-00"],
+                   "long": ["05-00-28-00-00-00-00-00-00", "05-00-04-00-00-00-00-00-00"]}
+        for _ in range(3):
+            r = await controls.apply_press_bindings(c, s, True, read=owner_registry, replaced=True)
+            assert r["ok"] and r["written"]
+        assert press_calls(c) == [("set_press_bindings", armoury)] * 3
+        assert s.library_written is False
+        # not replaced (Armoury Crate not installed) and nothing pending: no write
+        c.calls.clear()
+        await controls.apply_press_bindings(c, s, True, read=owner_registry, replaced=False)
+        assert c.calls == []
+        # replaced but not allowed (an old Overdrive): no write
+        await controls.apply_press_bindings(c, s, False, read=owner_registry, replaced=True)
+        assert c.calls == []
+    run(go())
+
+
+def test_restore_press_bindings_writes_armoury_setting_once(tmp_path):
+    async def go():
+        c = FakeClient()
+        s = settings(tmp_path, library={"single": "esc", "long": "win"}, library_written=True)
+        r = await controls.restore_press_bindings(c, s, read=owner_registry)
+        assert r["ok"] and r["written"]
+        assert press_calls(c) == [("set_press_bindings", {
+            "single": ["04-00-00-03-8C-88-76-00-00", "05-00-17-00-00-00-00-00-00"],
+            "long": ["05-00-28-00-00-00-00-00-00", "05-00-04-00-00-00-00-00-00"]})]
+        assert s.library == {"single": "esc", "long": "win"}             # stored choices untouched
+        assert s.library_written is False and Settings.load(s.path).library_written is False
+        # a failed write is reported, not raised; the restore stays pending
+        c.handlers["set_press_bindings"] = handler(fail(RESTARTED))
+        s.library_written = True
+        r = await controls.restore_press_bindings(c, s, read=owner_registry)
+        assert r["ok"] is False and r["message"] == RESTARTED and s.library_written is True
+    run(go())

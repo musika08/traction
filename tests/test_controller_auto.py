@@ -596,3 +596,46 @@ def test_desktop_settled_only_after_the_latest_reapply_was_seen(tmp_path):
         await ca.stop()
         assert ca.desktop_settled is False      # stop() wrote Gamepad
     run(go())
+
+
+# ---------- the Library button after an Auto mode switch ----------
+
+def press_calls(c):
+    return [x for x in c.calls if x[0] == "set_press_bindings"]
+
+
+def test_auto_switch_rewrites_the_library_button(tmp_path):
+    """A mode switch makes the controller forget the Library button's reports: rewritten after the zones."""
+    async def go():
+        c, r, ca, _ = setup(tmp_path)
+        r.settings.bindings = bindings.clean(CHOSEN)
+        r.settings.library = {"single": "esc", "long": "armoury"}
+        r.library_allowed = lambda: True
+        ca.start()
+        front(c, ["msedge.exe"])
+        frames(c, 0.0)
+        for _ in range(3):
+            await ca.run_once()
+        cmds = [x[0] for x in c.writes()]
+        assert cmds == ["set_controller_mode", "set_bindings", "set_bindings", "set_press_bindings"]
+        assert press_calls(c)[0][1]["single"][0] == "04-00-00-01-76-00-00-00-00"   # Esc
+        c.calls.clear()
+        await ca.stop()                                       # back to Gamepad: written again
+        assert len(press_calls(c)) == 1
+    run(go())
+
+
+def test_auto_switch_no_library_write_when_not_allowed(tmp_path):
+    async def go():
+        c, r, ca, _ = setup(tmp_path)
+        r.settings.library = {"single": "esc", "long": "esc"}
+        r.settings.library_written = True
+        r.library_allowed = lambda: False                     # Armoury Crate is running
+        ca.start()
+        front(c, ["msedge.exe"])
+        frames(c, 0.0)
+        for _ in range(3):
+            await ca.run_once()
+        await ca.stop()
+        assert mode_writes(c) == ["desktop", "gamepad"] and press_calls(c) == []
+    run(go())
