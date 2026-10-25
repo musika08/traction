@@ -71,4 +71,9 @@ running; nothing opened on any press.
   time) and 2 x a plain left Ctrl key (vk 0xA2, not injected) on the keyboard interface. Run B (5 presses, Big Picture
   in front, action Volume up): no `5A EC` at all; 6 x a plain left Alt (vk 0xA4, sysdown, not injected, held 0.2-0.75 s
   like the press) and 1 x left Ctrl. No ASUS firmware (AsusAtkWmiEvent) event for any press. With Armoury Crate
-  running it opened its own Task Manager about 1.6 s before `5A EC`. Cause of the switching unknown.
+  running it opened its own Task Manager about 1.6 s before `5A EC`.
+- **Correction (raw input with device names):** the Alt and Ctrl keys came from a separate USB keyboard
+  (VID 3151 PID 5030, the owner switching windows), not from the Ally. The button sends nothing on the keyboard
+  interface. In Steam Big Picture every press opens the game's context menu (the Menu/Start action), so the button
+  reaches Steam reliably through the gamepad path; `5A EC` is sporadic (0 of 5 in the last run) and is not the
+  button's own signal. Armoury Crate's GamepadCustomizePlugin loads GameInput.dll; next: find the gamepad-path field.
