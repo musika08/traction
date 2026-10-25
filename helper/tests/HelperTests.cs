@@ -1147,6 +1147,84 @@ namespace Traction.Helper.Tests
             True(WaitUntil(() => !rig.Listener.Running, 1000), "stopped");
         }
 
+        public static void ButtonActions_WithScanFillsScanCode()
+        {
+            var asked = new List<uint>();
+            Func<uint, uint> map = vk =>
+            {
+                asked.Add(vk);
+                switch (vk)
+                {
+                    case 0x0D: return 0x1C;      // Enter
+                    case 0x5B: return 0xE05B;    // left Windows key (E0)
+                    case 0x26: return 0xE048;    // Up (E0)
+                    case 0xAF: return 0xE030;    // Volume Up (E0)
+                    case 0x13: return 0xE11D;    // Pause (E1, not E0)
+                }
+                return 0;
+            };
+            InputStep enter = ButtonActions.WithScan(ButtonActions.Steps("enter")[0], map);
+            Equal((ushort)0x0D, enter.Vk, "the virtual key stays");
+            Equal((ushort)0x1C, enter.Scan, "Enter scan code");
+            True(!enter.Extended, "Enter is not extended");
+            InputStep win = ButtonActions.WithScan(ButtonActions.Steps("win")[1], map);
+            Equal((ushort)0x5B, win.Scan, "Win scan code without the E0 byte");
+            True(win.Extended && win.Up, "E0 sets the extended flag; up stays up");
+            InputStep vol = ButtonActions.WithScan(ButtonActions.Steps("volume_up")[0], map);
+            True(vol.Extended && vol.Scan == 0x30, "Volume Up: E0 30, extended");
+            InputStep up = ButtonActions.WithScan(ButtonActions.Steps("up")[0], v => 0x48);
+            True(up.Extended && up.Scan == 0x48, "an arrow stays extended even when the mapper gives no E0");
+            InputStep pause = ButtonActions.WithScan(new InputStep { Vk = 0x13 }, map);
+            True(!pause.Extended && pause.Scan == 0x1D, "an E1 prefix is not the extended flag");
+            InputStep none = ButtonActions.WithScan(new InputStep { Vk = 0x07 }, map);
+            True(!none.Extended && none.Scan == 0, "no scan code: 0, not extended");
+            int before = asked.Count;
+            InputStep click = ButtonActions.WithScan(ButtonActions.Steps("mouse_left")[0], map);
+            Equal(before, asked.Count, "a mouse step is not mapped");
+            True(click.Mouse && click.Scan == 0 && !click.Extended, "a mouse step is unchanged");
+        }
+
+        public static void Listener_EmptyReadIsAFailedRead()
+        {
+            var rig = new ListenRig();
+            rig.Source.Push(new byte[0]);
+            rig.Source.Push(Ec);
+            try
+            {
+                rig.Listener.SetAction("esc");
+                True(WaitUntil(() => rig.Sender.Count == 1, 3000), "the press after the reopen fired");
+                Equal(2, rig.Listener.Opens, "an empty read closes and reopens");
+                True(rig.Source.Closes >= 1, "closed after the empty read");
+                True(rig.Waits.Count == 1 && rig.Waits[0] == 2000, "one 2000 ms wait before reopening: " + string.Join(",", rig.Waits));
+                True(rig.Listener.LastError.Contains("empty"), "last error says empty: " + rig.Listener.LastError);
+            }
+            finally { rig.Listener.SetAction("nothing"); }
+        }
+
+        public static void Listener_OpenAndLastError()
+        {
+            var rig = new ListenRig();
+            Equal("", rig.Listener.LastError, "no error at first");
+            True(!rig.Listener.IsOpen, "not open before an action");
+            rig.Source.OpenResults.Enqueue(false);
+            try
+            {
+                rig.Listener.SetAction("esc");
+                True(WaitUntil(() => rig.Listener.IsOpen, 3000), "open after the retry");
+                True(rig.Listener.LastError.Contains("open"), "the failed open is the last error: " + rig.Listener.LastError);
+                rig.Source.Push(new IOException("The device is not connected."));
+                True(WaitUntil(() => rig.Listener.LastError.Contains("not connected"), 3000),
+                    "the read failure is the last error: " + rig.Listener.LastError);
+                True(WaitUntil(() => rig.Listener.IsOpen, 3000), "open again after the reopen");
+                rig.Sender.Throw = true;
+                rig.Source.Push(Ec);
+                True(WaitUntil(() => rig.Listener.LastError.Contains("SendInput failed"), 3000),
+                    "the send failure is the last error: " + rig.Listener.LastError);
+            }
+            finally { rig.Listener.SetAction("nothing"); }
+            True(!rig.Listener.IsOpen, "not open after nothing");
+        }
+
         private static ListenRig AttachListener(Rig rig)
         {
             var l = new ListenRig();
@@ -1207,6 +1285,27 @@ namespace Traction.Helper.Tests
                 Equal("nothing", d["action"], "action nothing");
                 Equal(false, d["running"], "not running");
                 Equal(0, rig.Bus.Writes.Count, "nothing written to the controller");
+            }
+            finally { l.Listener.SetAction("nothing"); }
+        }
+
+        public static void SetButtonAction_ReplyHasOpenAndLastError()
+        {
+            var rig = new Rig();
+            ListenRig l = AttachListener(rig);
+            try
+            {
+                var r = rig.Send("{\"id\":1,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"nothing\"}}");
+                var d = (Dictionary<string, object>)r["data"];
+                Equal(false, d["open"], "not open with nothing");
+                Equal("", d["last_error"], "no error yet");
+                l.Source.OpenResults.Enqueue(false);
+                rig.Send("{\"id\":2,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"esc\"}}");
+                True(WaitUntil(() => l.Listener.IsOpen, 3000), "opened after the retry");
+                r = rig.Send("{\"id\":3,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"esc\"}}");
+                d = (Dictionary<string, object>)r["data"];
+                Equal(true, d["open"], "open");
+                True(((string)d["last_error"]).Contains("open"), "last error: " + d["last_error"]);
             }
             finally { l.Listener.SetAction("nothing"); }
         }

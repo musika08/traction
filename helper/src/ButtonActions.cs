@@ -4,12 +4,13 @@ using System.Runtime.InteropServices;
 
 namespace Traction.Helper
 {
-    // One SendInput event: a key (virtual key, down or up, extended or not) or a mouse event (button flags or a wheel
-    // step).
+    // One SendInput event: a key (virtual key, its scan code once WithScan filled it, down or up, extended or not) or
+    // a mouse event (button flags or a wheel step).
     public struct InputStep
     {
         public bool Mouse;
         public ushort Vk;
+        public ushort Scan;
         public bool Up;
         public bool Extended;
         public uint MouseFlags;
@@ -70,6 +71,19 @@ namespace Traction.Helper
                 case "volume_down": return Keys(0xAE);
             }
             return null;
+        }
+
+        // The key step with its scan code: map is MapVirtualKey(vk, MAPVK_VK_TO_VSC_EX), whose high byte is 0xE0 for
+        // the extended keys (0xE1 is the Pause prefix, not the extended flag). The virtual key stays primary
+        // (KEYEVENTF_SCANCODE is not set); an E0 code also sets Extended, the fixed extended set keeps it. A mouse step
+        // comes back unchanged.
+        public static InputStep WithScan(InputStep step, Func<uint, uint> map)
+        {
+            if (step.Mouse || map == null) return step;
+            uint code = map(step.Vk);
+            step.Scan = (ushort)(code & 0xFF);
+            if (((code >> 8) & 0xFF) == 0xE0) step.Extended = true;
+            return step;
         }
 
         // One string per step ("down 0x5B", "up 0x5B", "mouse left down", "wheel 120"); null for an unknown id.
@@ -175,8 +189,15 @@ namespace Traction.Helper
             public InputUnion u;
         }
 
+        private const uint MAPVK_VK_TO_VSC_EX = 4;
+
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint SendInput(uint nInputs, [In] INPUT[] pInputs, int cbSize);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern uint MapVirtualKeyW(uint uCode, uint uMapType);
+
+        private static uint MapScan(uint vk) { return MapVirtualKeyW(vk, MAPVK_VK_TO_VSC_EX); }
 
         // Marshalled size of INPUT, for the layout test (x64: 40).
         public static int InputSize() { return Marshal.SizeOf(typeof(INPUT)); }
@@ -187,7 +208,7 @@ namespace Traction.Helper
             var inputs = new INPUT[steps.Count];
             for (int i = 0; i < steps.Count; i++)
             {
-                InputStep s = steps[i];
+                InputStep s = ButtonActions.WithScan(steps[i], MapScan);
                 if (s.Mouse)
                 {
                     inputs[i].type = INPUT_MOUSE;
@@ -198,6 +219,7 @@ namespace Traction.Helper
                 {
                     inputs[i].type = INPUT_KEYBOARD;
                     inputs[i].u.ki.wVk = s.Vk;
+                    inputs[i].u.ki.wScan = s.Scan;
                     inputs[i].u.ki.dwFlags = (s.Up ? KEYEVENTF_KEYUP : 0) | (s.Extended ? KEYEVENTF_EXTENDEDKEY : 0);
                 }
             }

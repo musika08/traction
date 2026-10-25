@@ -398,6 +398,8 @@ namespace Traction.Helper
             var d = new Dictionary<string, object>();
             d["action"] = ButtonListener.Action;
             d["running"] = ButtonListener.Running;
+            d["open"] = ButtonListener.IsOpen;
+            d["last_error"] = ButtonListener.LastError;
             return ProtocolKit.Reply(id, true, "", d);
         }
 

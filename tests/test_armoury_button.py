@@ -3,7 +3,7 @@ import asyncio
 import logging
 
 from fake_helper import FakeClient, fail, ok
-from traction import armoury_button, bindings
+from traction import armoury_button, bindings, controls
 from traction.armoury_button import ArmouryButton
 
 TRANSPORT = "The helper did not answer in time."
@@ -144,3 +144,59 @@ def test_no_call_while_an_armoury_switch_runs():
         await b.tick()
         assert button_calls(c) == [("set_button_action", {"action": "esc"})]
     asyncio.run(go())
+
+
+def test_no_call_while_a_bindings_write_runs():
+    async def go():
+        c = FakeClient()
+        FakeHelper(c)
+        b = ArmouryButton(c, lambda: "esc")
+        controls._bindings_calls[0] += 1
+        try:
+            await b.tick()
+            assert c.calls == []
+        finally:
+            controls._bindings_calls[0] -= 1
+        await b.tick()
+        assert button_calls(c) == [("set_button_action", {"action": "esc"})]
+    asyncio.run(go())
+
+
+def test_loop_call_waits_longer_than_the_panel_call():
+    async def go():
+        c = FakeClient()
+        FakeHelper(c)
+        b = ArmouryButton(c, lambda: "esc")
+        await b.tick()                     # the loop: above the longest helper call (set_bindings, 20 s)
+        await b.sync()                     # the panel: the default
+        assert c.timeouts["set_button_action"] == [armoury_button.LOOP_TIMEOUT, 10.0]
+        assert armoury_button.LOOP_TIMEOUT == 25.0 and armoury_button.LOOP_TIMEOUT > controls.BINDINGS_TIMEOUT
+    asyncio.run(go())
+
+
+def test_listener_status_is_logged_once_per_change(caplog):
+    async def go():
+        c = FakeClient()
+        replies = [
+            ok({"action": "esc", "running": True, "open": False, "last_error": ""}),
+            ok({"action": "esc", "running": True, "open": False, "last_error": ""}),
+            ok({"action": "esc", "running": True, "open": True, "last_error": ""}),
+            ok({"action": "esc", "running": True, "open": True, "last_error": ""}),
+            ok({"action": "esc", "running": True, "open": False, "last_error": "read failed: gone"}),
+            ok({"action": "esc", "running": True, "open": False, "last_error": "read failed: gone"}),
+            fail(TRANSPORT),
+            ok({"action": "esc", "running": True, "open": False, "last_error": "read failed: gone"}),
+        ]
+
+        async def h(_args):
+            return replies.pop(0)
+        c.handlers["set_button_action"] = h
+        b = ArmouryButton(c, lambda: "esc", logger=logging.getLogger("traction-test"))
+        for _ in range(8):
+            await b.tick()
+    with caplog.at_level(logging.INFO, logger="traction-test"):
+        asyncio.run(go())
+    status = [r for r in caplog.records if r.levelno == logging.INFO and "Armoury Crate button" in r.getMessage()]
+    assert len(status) == 3        # first reply, opened, read error; a failed reply in between does not re-log
+    assert "open False" in status[0].getMessage() and "open True" in status[1].getMessage()
+    assert "read failed: gone" in status[2].getMessage()

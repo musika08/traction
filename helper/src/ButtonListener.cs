@@ -135,7 +135,9 @@ namespace Traction.Helper
 
     // Runs the chosen action when the Armoury Crate button sends input report 5A EC. A reader thread runs while the
     // action is not "nothing": open (on failure wait RetryMs and try again), read, Handle, repeat; a failed read
-    // (sleep, unplug) closes, waits RetryMs and reopens. Setting "nothing" closes the collection and ends the thread.
+    // (sleep, unplug, or a read of 0 bytes, so it can never spin) closes, waits RetryMs and reopens. Setting "nothing"
+    // closes the collection and ends the thread. IsOpen and LastError (the last open, read or send failure; "" when
+    // none) go into the set_button_action reply.
     public sealed class ButtonListener
     {
         public const byte TriggerId = 0x5A;
@@ -158,6 +160,8 @@ namespace Traction.Helper
         private ManualResetEvent stopEvent;
         private DateTime? lastFired;
         private int opens;
+        private volatile bool isOpen;
+        private volatile string lastError = "";
 
         // wait null: the reader sleeps on an event that a stop sets, so "nothing" ends it at once even mid-retry.
         public ButtonListener(IReportSource source, IInputSender sender, Func<DateTime> clock, Action<int> wait)
@@ -177,6 +181,12 @@ namespace Traction.Helper
             get { lock (gate) return thread != null && thread.IsAlive; }
         }
 
+        // True while the reader holds the collection open.
+        public bool IsOpen { get { return isOpen; } }
+
+        // The last open, read or send failure ("" when none yet); kept until the next failure replaces it.
+        public string LastError { get { return lastError; } }
+
         // Successful opens of the collection.
         public int Opens { get { return Interlocked.CompareExchange(ref opens, 0, 0); } }
 
@@ -193,6 +203,7 @@ namespace Traction.Helper
                     generation++;
                     if (stopEvent != null) stopEvent.Set();
                     source.Close();
+                    isOpen = false;
                     stopping = thread;
                 }
                 else if (thread == null || !thread.IsAlive || threadGen != generation)
@@ -230,7 +241,7 @@ namespace Traction.Helper
                 lastFired = now;
             }
             try { sender.Send(steps); }
-            catch (Exception ex) { Log("sending the button action failed: " + ex.Message); }
+            catch (Exception ex) { Fail("sending the button action failed: " + ex.Message); }
             return true;
         }
 
@@ -259,9 +270,17 @@ namespace Traction.Helper
                         lock (gate)
                         {
                             if (gen != generation || action == "nothing") return;
-                            try { ok = source.Open(); }
-                            catch (Exception ex) { Log("opening the controller failed: " + ex.Message); ok = false; }
-                            if (ok) Interlocked.Increment(ref opens);
+                            try
+                            {
+                                ok = source.Open();
+                                if (!ok) Fail("opening the controller failed: the collection was not found or could not be opened");
+                            }
+                            catch (Exception ex) { Fail("opening the controller failed: " + ex.Message); ok = false; }
+                            if (ok)
+                            {
+                                Interlocked.Increment(ref opens);
+                                isOpen = true;
+                            }
                         }
                         if (!ok)
                         {
@@ -272,7 +291,12 @@ namespace Traction.Helper
                     }
 
                     byte[] report;
-                    try { report = source.Read(); }
+                    try
+                    {
+                        report = source.Read();
+                        // 0 bytes is a failed read too: reading again at once could spin.
+                        if (report == null || report.Length == 0) throw new IOException("The controller sent an empty report.");
+                    }
                     catch (Exception ex)
                     {
                         open = false;
@@ -280,8 +304,9 @@ namespace Traction.Helper
                         {
                             if (gen != generation || action == "nothing") return;   // stopped: the source is not ours
                             source.Close();
+                            isOpen = false;
                         }
-                        Log("reading the controller failed, reopening in " + RetryMs + " ms: " + ex.Message);
+                        Fail("reading the controller failed, reopening in " + RetryMs + " ms: " + ex.Message);
                         Pause(ev);
                         continue;
                     }
@@ -296,6 +321,12 @@ namespace Traction.Helper
                     Pause(ev);
                 }
             }
+        }
+
+        private void Fail(string message)
+        {
+            lastError = message;
+            Log(message);
         }
 
         private static void Log(string message)
