@@ -21,7 +21,7 @@ guides (FAQ 1050220, 1050046, the ROG Ally remap guide, the Armoury Crate SE v3 
   G-Helper's gamepad and desktop defaults.
 - **Per button "Reset to factory"** and **"Reset all buttons"** (both sets).
 - The **Xbox button** is not touched (Steam uses it as its own menu button, which the owner wants to keep).
-- **Armoury Crate button:** single press, Part B, see section 6. The Command Center button is not Traction's.
+- **Library button** (top right, three vertical lines): single and long press, Part B, see section 6. The Command Center button is not Traction's.
 
 ## 2. Panel
 
@@ -59,45 +59,61 @@ Primary in its button slot and keeps the factory code in its secondary slot (the
 actions become that button's Gamepad Primary with its switch off; v1 combos become Gamepad Secondaries.
 The mode write is followed by the zones of that mode's set (changed or touched), as now.
 
-## 6. Part B: the Armoury Crate button (single press)
+## 6. Part B: the Library button (single and long press)
 
-Probe: `docs/notes/2026-10-24-remap-probe.md`, "Part B probe" (2026-10-25), and `X:\Projects\Armoury Crate\FINDINGS.md`.
+Revised 2026-10-25 after the live test and REA. The first Part B (listening for `5A EC`) was wrong: those tests
+pressed the Menu button, and `5A EC` comes from Menu presses now and then. Evidence and report layout:
+`docs/notes/2026-10-24-remap-probe.md` ("Library and Command Center press bindings"). The owner calls the top-right
+button (three vertical lines) the **Library button**.
 
-**What the owner gets:** a row **"Armoury Crate button"** (the button on the right side, below Menu) in the Buttons
-section, with one inline picker. The chosen action runs the moment the button is pressed. Default **Nothing**:
-Traction leaves the button alone and doesn't listen. Owner's choice: single press only (a long press would make
-every single press wait a few seconds).
+**What the owner gets:** a **Library button** row in the Buttons section. Pressing it expands two inline pickers,
+**Single press** and **Long press**, plus "Reset to factory". The controller does the timing, so both work on every
+press with no delay.
 
-- **One setting for both modes** (Gamepad and Desktop): Armoury Crate also keeps one per profile.
-- **"Reset all buttons"** also sets it back to Nothing (the button's original behaviour).
-- **Actions:** the action list's mouse, key and Windows entries (Left/Right/Middle click, Scroll up/down, Esc, Enter,
-  Tab, Backspace, Space, arrows, Page Up/Down, Windows key, Show desktop, Screenshot, Task Manager, Close window,
-  Alt+Tab, Win+Tab, Volume up/down). Not the gamepad buttons: Windows can't fake one without an extra driver. Not
-  "Show touch keyboard" yet (it is a firmware media code with no plain key behind it).
-- **Not touched:** the Command Center button (its quick press is planned for Overdrive's "Command Center button"
-  option and the Bar; its long press, the key F21, opens Armoury Crate SE) and the Xbox button.
-- **If Armoury Crate also acts on the button** (its own Shortcuts & Key Binding setting for the Library button):
-  both happen. The row's note says to set that one to nothing in Armoury Crate. In the probe nothing opened from
-  Armoury Crate with all its services running.
+- **Choices** (one list for both pickers):
+  - **Armoury Crate setting** (the default): the action chosen in Armoury Crate's Shortcuts & Key Binding page,
+    read from its saved settings (today: single = Task Manager, long = Controller Overview).
+  - ASUS actions the controller runs itself: Show desktop, Task Manager, Screen capture, Volume up, Volume down,
+    Mic mute, Touch keyboard, Game Bar, Xbox Library, Controller Overview, Launch Armoury Crate.
+  - The keys and shortcuts from Traction's action list (Esc, Enter, Tab, Backspace, Space, arrows, Page Up/Down,
+    Windows key, Close window, Alt+Tab, Win+Tab). Not gamepad buttons or mouse clicks: the Library slot only takes keys
+    and ASUS actions.
+- **One setting for both controller modes** (Armoury Crate keeps one too).
+- **"Reset to factory" and "Reset all buttons"** set both back to **Armoury Crate setting**.
+- **The Command Center button is not changed.** Both buttons share the controller's two reports, so Traction always
+  sends Command Center's own Armoury Crate setting with them (today: quick press = Command Center, which Overdrive
+  and the Bar rely on; long press = Launch Armoury Crate).
+- **While Armoury Crate is running, its setting applies:** Armoury Crate rewrites these reports after sleep and mode
+  changes, so Traction does not write them then. The row is greyed with the note "Armoury Crate is running, so its
+  Library setting applies. Turn on Use Traction instead of Armoury Crate to change it here."
+- The Xbox button is still not touched.
 
-**How it works:**
-- The button sends the vendor input report `5A EC` (236) on the controller's 0x5A collection (the one Traction
-  already finds for its feature reports). Traction's helper opens that collection for shared reading (read only;
-  Armoury Crate and G-Helper keep their own reads) on a background thread, only while an action is chosen.
-- On `5A EC` the helper sends the action with SendInput (keys as scan codes, volume as the media keys, mouse as
-  mouse input). The helper runs in the owner's desktop session with admin rights (checked: session 1, user Musika),
-  so its input reaches every window, Task Manager included.
-- New helper command `set_button_action {action}` (allow-listed ids, `nothing` stops the reader). main.py sends it
-  on start and on every change; the setting is stored in `settings.json` (`armoury_button`).
-- After sleep or an unplug the read fails: the helper reopens the collection every 2 s until it is back.
-- **Known limit:** after a hold of over about 5 s the firmware sends `5A EC` again at the release, which can't be
-  told apart from a new press. Such a hold runs the action twice. A repeat within 0.5 s is ignored (bounce).
+**How it reaches the controller:**
+- Two feature reports on the controller collection Traction already writes, 64 bytes, zero padded:
+  - single: `5A D1 1D 01 12` + Library slot (9 bytes) + Command Center slot (9 bytes)
+  - long: `5A D1 23 01 12` + Library slot + Command Center slot
+- Slot: an ASUS action `05 00 <code> 00 00 00 00 00 00`, a key `04 00 00 01 <key> 00 00 00 00`, or a shortcut
+  `04 00 00 <n> k1 k2 k3 00 00` (PS/2 set-2 codes, the same scheme as the other buttons).
+- "Armoury Crate setting" is read from `HKCU\Software\ASUS\ARMOURY CRATE Service\GamepadCustomize`
+  (`LibBtnSFunctId`, `LibBtnLFunctId`, `CCBtnSFunctId`, `CCBtnLFunctId`) and turned into a slot the way Armoury Crate
+  does (ids 1-12 ASUS actions, 0x21-0x2A shortcuts, above 0x60 a single key). An id Traction can't translate, or a
+  missing value, falls back to Armoury Crate's installed defaults (single: Xbox Library / Command Center; long:
+  Screen capture / Launch Armoury Crate).
+- Written when the owner changes it and on every reapply (start, wake, mode switch, Armoury switched), only while
+  Armoury Crate is not running and only once the owner has chosen something other than Armoury Crate setting for
+  either press (otherwise Traction never sends these reports). New helper command `set_press_bindings {short, long}`
+  (two 18-byte slot pairs, allow-listed codes only).
+- Before the build relies on it, a device check: send the owner's own Armoury Crate values back and confirm the
+  Library button still opens Task Manager and Command Center still works; then one changed value.
+- **Replaces the first Part B:** the `5A EC` reader, `set_button_action`, the 5 s loop and the `armoury_button`
+  setting are removed (a stored `armoury_button` is ignored).
 
 ## 7. Tests
 
 Unit: the v2 settings shape and v1 migration; per-mode slots; switch off/on for M1/M2; per-button and full reset;
-panel helpers; Part B: only `5A EC` triggers, the 0.5 s bounce, each action's input sequence, the allow-list,
-`nothing` stops the reader. Live (Part B): each action once from Steam Big Picture and the desktop; after sleep. Live on the Ally (Steam Big Picture in front): A Primary = B; M1 + A Secondary = Screenshot; M1 switch
+panel helpers; Part B: slot encoding per choice, the Armoury Crate id translation and fallback, Command Center slots
+always sent, no write while Armoury Crate runs. Live (Part B): device check first, then single and long press, after
+sleep, Command Center unchanged. Live on the Ally (Steam Big Picture in front): A Primary = B; M1 + A Secondary = Screenshot; M1 switch
 off and M1 Primary = B; Desktop set differs from Gamepad; sleep and wake keeps both; reset all.
 
 ## 8. Out of scope
