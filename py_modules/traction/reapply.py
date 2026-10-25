@@ -46,9 +46,13 @@ class Reapplier(ReapplierCore):
         return self.BLOCKED if self._blocked() else self.NOTHING_CHOSEN
 
     def __init__(self, client, settings: Settings, clock=time, power_source: Optional[Callable] = None,
-                 poll: float = POLL, logger: Optional[logging.Logger] = None, record=None):
+                 poll: float = POLL, logger: Optional[logging.Logger] = None, record=None,
+                 wake_source: Optional[Callable[[], Optional[int]]] = None):
         super().__init__(client, clock=clock, power_source=power_source, logger=logger, poll=poll, record=record)
         self.settings = settings
+        # main.py: wake_win32.last_wake_id. A new wake record is a trigger (Modern Standby fools the clock check).
+        self.wake_source = wake_source
+        self._wake: Optional[int] = None   # the newest wake record seen
         # main.py: True while an Overdrive older than 0.2.0 drives the controller (nothing is written then)
         self.blocked: Optional[Callable[[], bool]] = None
         self._reset_seen = False   # a reapply's bindings write ended in the helper's factory reset
@@ -77,8 +81,30 @@ class Reapplier(ReapplierCore):
                 self.warning = " ".join(w for w in (self.warning, self._missed) if w)
                 self._missed = ""
 
+    def prime(self) -> None:
+        super().prime()
+        if self.wake_source is not None:
+            self._wake = self.wake_source()
+            if self._wake is None:
+                self.log.warning("Could not read Windows' wake events: wakes from standby are not noticed")
+            else:
+                self.log.info(f"Watching for wake events (last one: record {self._wake})")
+
+    def _woke(self) -> bool:
+        """A wake record newer than the last one seen (None, an unreadable log, keeps the last one)."""
+        if self.wake_source is None:
+            return False
+        wake = self.wake_source()
+        if wake is None:
+            return False
+        woke = self._wake is not None and wake != self._wake
+        self._wake = wake
+        return woke
+
     def _triggers(self) -> "list[str]":
         reasons = super()._triggers()
+        if self._woke() and "resume" not in reasons:
+            reasons.append("wake")
         if reasons:   # a new trigger (resume, AC change, Armoury switched) gets its own run of retries
             self._misses = 0
         return reasons

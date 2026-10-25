@@ -20,6 +20,7 @@ from traction.overdrive_compat import (UPDATE_NOTE, find_overdrive, find_overdri
                                        old_overdrive, overdrive_holds_armoury_record, read_old_record)
 from traction.reapply import Reapplier  # noqa: E402
 from traction.settings import CONTROLLER_MODES, Settings, migrate_from_overdrive  # noqa: E402
+from traction.wake_win32 import last_wake_id  # noqa: E402
 
 NAME = "Traction"
 HELPER_EXE = "traction-helper.exe"
@@ -160,7 +161,8 @@ class Plugin:
         client = TractionHelperClient(plugin_dir=PLUGIN_DIR, runtime_dir=runtime_dir, logger=decky.logger, name=NAME)
         # Two views of one record file: the switch's (changed only under its locks) and the reapplier's (read only).
         folder = record_dir()
-        reapplier = Reapplier(client, settings, logger=decky.logger, record=ArmouryRecord(folder, decky.logger))
+        reapplier = Reapplier(client, settings, logger=decky.logger, record=ArmouryRecord(folder, decky.logger),
+                              wake_source=last_wake_id)
         self._attach(client, settings, reapplier, ArmouryRecord(folder, decky.logger), old=old, plugins=plugins)
         client.start()
         self._startup = asyncio.ensure_future(self._startup_sequence())

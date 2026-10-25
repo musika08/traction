@@ -366,3 +366,23 @@ def test_old_overdrive_gets_no_retries(tmp_path):
         assert r.rerun is False and c.writes() == [] and c.calls == []
         assert await r.tick() is False
     run(go())
+
+
+def test_reapply_on_standby_wake(tmp_path):
+    """Modern Standby: the clocks keep running and the AC line stays the same, but Windows logs each wake; a new
+    wake record is a trigger. An unreadable log (None) is no trigger and keeps the last record seen."""
+    async def go():
+        c = _controller_client()
+        wake = Power(13034)
+        r = Reapplier(c, make(tmp_path), clock=Clock(), power_source=Power(), wake_source=wake)
+        r.prime()
+        assert await r.tick() is False
+        wake.value = 13050                 # the Ally woke from standby
+        assert await r.tick() is True
+        assert [cmd for cmd, _ in c.writes()] == ["set_controller_mode", "set_vibration"]
+        assert await r.tick() is False
+        wake.value = None
+        assert await r.tick() is False
+        wake.value = 13050
+        assert await r.tick() is False
+    run(go())
