@@ -145,7 +145,8 @@ def test_not_ally_starts_nothing(monkeypatch, tmp_path):
         await p._main()
         state = await p.get_state()
         results = [await p.set_controller_mode("desktop"), await p.set_grip_vibration(False),
-                   await p.set_touchscreen(False), await p.set_armoury_replaced(True)]
+                   await p.set_touchscreen(False), await p.set_armoury_replaced(True),
+                   await p.set_armoury_button("esc")]
         await p._unload()
         return state, results
     state, results = run(go())
@@ -1663,3 +1664,102 @@ def test_reset_button_on_a_back_button_turns_the_switch_on_and_writes_zone_8(tmp
         assert binding_writes(c) == [(8, Z8_FACTORY)] and binding_args(c)[0]["watch"] is False
         assert s.bindings == with_choices(("desktop", "back_right", "primary", "a"))
     run(go())
+
+
+# ---------- the Armoury Crate button (Part B) ----------
+
+TRANSPORT = "The helper did not answer in time."
+
+
+def armoury_button_calls(c):
+    return [x for x in c.calls if x[0] == "set_button_action"]
+
+
+def test_set_armoury_button(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        assert (await wait(p.set_armoury_button("task_manager"))) == {"ok": True, "message": ""}
+        assert s.armoury_button == "task_manager" and Settings.load(s.path).armoury_button == "task_manager"
+        assert armoury_button_calls(c) == [("set_button_action", {"action": "task_manager"})]
+        c.calls.clear()
+        for bad in ("a", "touch_keyboard", "factory", "", 5, None, ["esc"]):
+            r = await wait(p.set_armoury_button(bad))
+            assert r["ok"] is False and r["message"], bad
+        assert c.calls == [] and s.armoury_button == "task_manager"
+        assert Settings.load(s.path).armoury_button == "task_manager"
+        # a transport failure is reported as is; the choice stays stored and the loop sends it later
+        c.handlers["set_button_action"] = reply(fail(TRANSPORT))
+        assert (await wait(p.set_armoury_button("esc"))) == {"ok": False, "message": TRANSPORT}
+        assert s.armoury_button == "esc" and Settings.load(s.path).armoury_button == "esc"
+        # refused while an Armoury Crate switch runs, nothing stored or sent
+        c.calls.clear()
+        p.armoury._busy = True
+        assert (await wait(p.set_armoury_button("win"))) == {"ok": False, "message": BUSY}
+        p.armoury._busy = False
+        assert c.calls == [] and s.armoury_button == "esc"
+    run(go())
+
+
+def test_set_armoury_button_works_with_an_old_overdrive(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path, old=True)
+        assert (await wait(p.set_armoury_button("screenshot"))) == {"ok": True, "message": ""}
+        assert armoury_button_calls(c) == [("set_button_action", {"action": "screenshot"})]
+        assert Settings.load(s.path).armoury_button == "screenshot"
+        assert [x for x in c.calls if x[0] in ("set_bindings", "set_controller_mode", "set_vibration")] == []
+    run(go())
+
+
+def test_state_has_armoury_button(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        assert (await wait(p.get_state()))["armoury_button"] == "nothing"
+        s.armoury_button = "alt_tab"
+        assert (await wait(p.get_state()))["armoury_button"] == "alt_tab"
+        assert (await wait(main.Plugin().get_state()))["armoury_button"] == "nothing"   # not an Ally
+    run(go())
+
+
+def test_reset_all_clears_armoury_button(tmp_path):
+    async def go():
+        p, c, s = plugin_with(tmp_path)
+        s.armoury_button = "task_manager"   # (plugin_with sends armoury_* keywords to the shared record)
+        controller_found(c)
+        assert (await wait(p.reset_all_buttons())) == {"ok": True, "message": ""}
+        assert s.armoury_button == "nothing" and Settings.load(s.path).armoury_button == "nothing"
+        assert armoury_button_calls(c) == [("set_button_action", {"action": "nothing"})]
+        assert [z for z, _ in binding_writes(c)] == list(range(1, 10))
+        # already nothing: no call for it
+        c.calls.clear()
+        assert (await wait(p.reset_all_buttons()))["ok"]
+        assert armoury_button_calls(c) == []
+        # an old Overdrive refuses the controller writes; the Armoury Crate button is still reset
+        p2, c2, s2 = plugin_with(tmp_path / "b", old=True)
+        s2.armoury_button = "task_manager"
+        controller_found(c2)
+        assert (await wait(p2.reset_all_buttons())) == {"ok": False, "message": UPDATE}
+        assert s2.armoury_button == "nothing" and Settings.load(s2.path).armoury_button == "nothing"
+        assert armoury_button_calls(c2) == [("set_button_action", {"action": "nothing"})]
+        assert binding_writes(c2) == []
+    run(go())
+
+
+def test_armoury_button_loop_starts_with_the_helper_and_stops_before_it(monkeypatch, tmp_path):
+    clients = ally_main(monkeypatch)
+    seen = []
+    real_stop = main.ArmouryButton.stop
+
+    async def stop(self):
+        seen.append(clients[0][0].stopped)    # the helper still runs when the loop stops
+        await real_stop(self)
+    monkeypatch.setattr(main.ArmouryButton, "stop", stop)
+
+    async def go():
+        p = main.Plugin()
+        await p._main()
+        assert p.armoury_button._task is not None and clients[0][0].started
+        await p._startup
+        await p._unload()
+        return p
+    p = run(go())
+    assert seen == [False] and p.armoury_button._task is None and clients[0][0].stopped

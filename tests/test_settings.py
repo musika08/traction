@@ -36,7 +36,7 @@ def test_round_trip_and_bak(tmp_path):
     again = Settings.load(str(p))
     assert (again.controller_mode, again.grip_vibration, again.user_set) == ("auto", False, True)
     assert json.loads(p.read_text(encoding="utf-8")) == {"controller_mode": "auto", "grip_vibration": False,
-                                                         "user_set": True}
+                                                         "user_set": True, "armoury_button": "nothing"}
     assert os.path.exists(str(p) + ".bak")
 
 
@@ -200,3 +200,17 @@ def test_touched_zones_round_trip_and_junk_dropped(tmp_path):
     for bad in ("5", 5, None, {"5": 1}):
         p.write_text(json.dumps({"touched_zones": bad}), encoding="utf-8")
         assert Settings.load(str(p)).touched_zones == set()
+
+
+def test_settings_armoury_button(tmp_path):
+    p = tmp_path / "settings.json"
+    s = Settings.load(str(p))
+    assert s.armoury_button == "nothing"
+    s.armoury_button = "task_manager"
+    s.save()
+    assert json.loads(p.read_text(encoding="utf-8"))["armoury_button"] == "task_manager"
+    assert Settings.load(str(p)).armoury_button == "task_manager"
+    for bad in ("a", "touch_keyboard", "factory", "Task_Manager", 5, None, True, ["esc"]):
+        p.write_text(json.dumps({"armoury_button": bad, "grip_vibration": False}), encoding="utf-8")
+        s = Settings.load(str(p))
+        assert s.armoury_button == "nothing" and s.grip_vibration is False, bad   # never fails, the rest kept

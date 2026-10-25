@@ -11,7 +11,8 @@ _PY_MODULES = os.path.join(PLUGIN_DIR, "py_modules")
 if _PY_MODULES not in sys.path:
     sys.path.append(_PY_MODULES)
 
-from traction import bindings, controls, device  # noqa: E402
+from traction import armoury_button, bindings, controls, device  # noqa: E402
+from traction.armoury_button import ArmouryButton  # noqa: E402
 from traction.armoury_record import RECORD_DIR, ArmouryLocked, ArmouryRecord  # noqa: E402
 from traction.armoury_switch import ArmourySwitch, migrate_from_settings  # noqa: E402
 from traction.controller_auto import ControllerAuto  # noqa: E402
@@ -105,6 +106,7 @@ class Plugin:
         self.reapplier = None
         self.controller_auto = None
         self.armoury = None              # the Armoury Crate switch (its record is shared with Overdrive)
+        self.armoury_button = None       # keeps the helper told what the Armoury Crate button runs
         self._old = False                # an Overdrive older than 0.2.0 drives the controller: Traction writes none
         self._plugins_dir = ""
         self._controls = None            # the last controller/touchscreen reading (shown while a switch runs)
@@ -120,6 +122,9 @@ class Plugin:
         if client is not None and record is not None:
             self.armoury = ArmourySwitch(client, record, NAME, logger=decky.logger,
                                          on_replaced=self._armoury_replaced)
+        if client is not None and settings is not None:
+            # Created here (so every setter finds it); _main starts its loop right after the helper.
+            self.armoury_button = ArmouryButton(client, lambda: self.settings.armoury_button, logger=decky.logger)
         if reapplier is not None:
             reapplier.busy_check = self._busy
             reapplier.blocked = lambda: self._old
@@ -165,6 +170,8 @@ class Plugin:
                               wake_source=last_wake_id)
         self._attach(client, settings, reapplier, ArmouryRecord(folder, decky.logger), old=old, plugins=plugins)
         client.start()
+        # Not held back by an old Overdrive (it writes nothing to the controller), so not in _start_writes.
+        self.armoury_button.start()
         self._startup = asyncio.ensure_future(self._startup_sequence())
         decky.logger.info("Traction started")
 
@@ -238,6 +245,8 @@ class Plugin:
             await _unload_step("put the controller back to Gamepad", self.controller_auto.stop())
         if self.reapplier is not None:
             await _unload_step("stop the reapplier", self.reapplier.stop())
+        if self.armoury_button is not None:
+            await _unload_step("stop the Armoury Crate button loop", self.armoury_button.stop())
         if self.client is not None:
             await _unload_step("stop the helper", self.client.stop())
         decky.logger.info("Traction unloaded")
@@ -261,6 +270,7 @@ class Plugin:
             "vibration": bool(s.grip_vibration),
             "touchscreen": dict(UNREAD["touchscreen"]),
             "buttons": _buttons(s.bindings, _set_of(self._live_mode(s))),
+            "armoury_button": s.armoury_button,
             "blocked": "", "note": "", "busy": False, "warning": "", "unavailable": "",
         }
         if self.client is None:
@@ -500,11 +510,42 @@ class Plugin:
     async def reset_all_buttons(self) -> dict:
         """Clears both sets and turns both back switches on, writing all 9 zones with the live set's factory slots
         (Desktop unwatched; the zones written in Desktop stay touched until the Gamepad factory write lands). A single
-        press, no confirmation (owner rule)."""
-        refused = self._refuse_controller()
+        press, no confirmation (owner rule). The Armoury Crate button goes back to nothing too (owner decision
+        2026-10-25), even while an old Overdrive refuses the controller writes."""
+        refused = self._refuse_write()
         if refused:
             return refused
-        return await self._change_buttons(lambda _b: bindings.clean(None), bindings.all_zones())
+        note = ""
+        if self.settings.armoury_button != armoury_button.NOTHING:
+            r = await self._store_armoury_button(armoury_button.NOTHING)
+            note = "" if r["ok"] else r["message"]
+        if self._old:
+            return _fail(" ".join(m for m in (UPDATE_NOTE, note) if m))
+        result = await self._change_buttons(lambda _b: bindings.clean(None), bindings.all_zones())
+        if note:   # the Armoury Crate button's nothing did not reach the helper (the loop sends it again)
+            result = _fail(" ".join(m for m in (result["message"], note) if m))
+        return result
+
+    # ---------- the Armoury Crate button ----------
+
+    async def _store_armoury_button(self, action: str) -> dict:
+        """Stores and saves the action, then tells the helper. A failed send is reported as is: the choice stays
+        stored and the loop sends it again."""
+        self.settings.armoury_button = action
+        failed = self._save()
+        r = await self.armoury_button.sync()
+        message = str(r.get("message") or "") if not r.get("ok") else ""
+        return {"ok": bool(r.get("ok")), "message": " ".join(m for m in (message, failed) if m)}
+
+    async def set_armoury_button(self, action) -> dict:
+        """What a press of the Armoury Crate button runs (one of armoury_button.ACTIONS, "nothing" to stop handling
+        it). Works while an old Overdrive blocks the controller writes: nothing is written to the controller."""
+        refused = self._refuse_write()
+        if refused:
+            return refused
+        if not isinstance(action, str) or action not in armoury_button.ACTIONS:
+            return _fail("Unknown button action.")
+        return await self._store_armoury_button(action)
 
     # ---------- Armoury Crate ----------
     # The switch, the record and its rules are ArmourySwitch's (armoury_switch.py, shared with Overdrive).

@@ -8,16 +8,21 @@ settings_file.py's. Touch Screen is not stored: it is read from Windows.
 import os
 from typing import Optional
 
+from . import armoury_button
 from . import bindings as binding_model
 from . import settings_file
 
 OWNER = "Traction"
 CONTROLLER_MODES = ("gamepad", "desktop", "auto")
-FIELDS = ("controller_mode", "grip_vibration", "user_set")   # bindings is saved too (compact, see to_dict)
+FIELDS = ("controller_mode", "grip_vibration", "user_set", "armoury_button")   # bindings too (compact, see to_dict)
 
 
 def _mode(v) -> Optional[str]:
     return v if isinstance(v, str) and v in CONTROLLER_MODES else None
+
+
+def _armoury_action(v) -> Optional[str]:
+    return v if isinstance(v, str) and v in armoury_button.ACTIONS else None
 
 
 class Settings:
@@ -32,6 +37,8 @@ class Settings:
         # Zones Traction has written custom slots to and not yet written back to the Gamepad factory set: they are
         # rewritten (factory slots where the owner has no choice) until then.
         self.touched_zones: set = set()
+        # What a press of the Armoury Crate button runs (armoury_button.ACTIONS), one for both controller modes.
+        self.armoury_button = armoury_button.NOTHING
         self.logger = None
         self._reset_note = ""               # why the file was reset (shown in get_state)
         self._unreadable_pending = False    # the unreadable file is still on disk with no copy kept yet
@@ -65,6 +72,9 @@ class Settings:
             self.grip_vibration = raw["grip_vibration"]
         if isinstance(raw.get("user_set"), bool):
             self.user_set = raw["user_set"]
+        action = _armoury_action(raw.get("armoury_button"))
+        if action is not None:
+            self.armoury_button = action
         self.bindings = binding_model.clean(raw.get("bindings"))   # unknown ids drop to factory, never fails
         zones = raw.get("touched_zones")
         if isinstance(zones, list):
