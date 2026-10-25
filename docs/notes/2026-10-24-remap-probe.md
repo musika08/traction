@@ -77,3 +77,10 @@ running; nothing opened on any press.
   interface. In Steam Big Picture every press opens the game's context menu (the Menu/Start action), so the button
   reaches Steam reliably through the gamepad path; `5A EC` is sporadic (0 of 5 in the last run) and is not the
   button's own signal. Armoury Crate's GamepadCustomizePlugin loads GameInput.dll; next: find the gamepad-path field.
+- **Correction 2 (2026-10-25): the earlier Part B tests pressed the Menu button.** On the right side the Library /
+  Armoury Crate button is the TOP one (three vertical lines), Menu (three horizontal lines) is below it. `5A EC`
+  came from Menu presses (sporadically). The real Library button makes the controller's keyboard interface
+  (MI_03, raw input device `HID\VID_0B05&PID_1B4C&MI_03`) type Ctrl+Shift+Esc on every press: the owner's Armoury
+  Crate setting (Library single = Task Manager) is a firmware key binding. Next: find the report that sets the
+  Library binding (not one of zones 1-9), so Traction can write it like the other buttons. Part B's `5A EC` listener
+  is wrong for this button and was set to Nothing on the device.
