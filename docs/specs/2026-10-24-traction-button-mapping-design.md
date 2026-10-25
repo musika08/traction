@@ -69,6 +69,7 @@ Traction leaves the button alone and doesn't listen. Owner's choice: single pres
 every single press wait a few seconds).
 
 - **One setting for both modes** (Gamepad and Desktop): Armoury Crate also keeps one per profile.
+- **"Reset all buttons"** also sets it back to Nothing (the button's original behaviour).
 - **Actions:** the action list's mouse, key and Windows entries (Left/Right/Middle click, Scroll up/down, Esc, Enter,
   Tab, Backspace, Space, arrows, Page Up/Down, Windows key, Show desktop, Screenshot, Task Manager, Close window,
   Alt+Tab, Win+Tab, Volume up/down). Not the gamepad buttons: Windows can't fake one without an extra driver. Not

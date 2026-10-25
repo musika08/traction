@@ -24,7 +24,7 @@
 ## Rulings made while planning
 
 - Ruling: the Armoury Crate button works while an Overdrive older than 0.2.0 blocks Traction's controller writes (it writes nothing to the controller) — cost if wrong: one `if self._old` check.
-- Ruling: "Reset all buttons" does not clear the Armoury Crate button (it resets the controller's own bindings; this row has its own Nothing) — cost if wrong: one line in reset_all_buttons.
+- Owner decision (2026-10-25): "Reset all buttons" also sets the Armoury Crate button back to `nothing` (its original behaviour: Traction stops handling it). Traction never changes Armoury Crate's own settings.
 - Ruling: main.py resends the action every 5 s while it is not `nothing` (the helper treats the same action as a no-op), instead of a restart hook in the shared HelperClient — cost if wrong: one cheap pipe call per 5 s.
 
 ## Review Focus
@@ -89,7 +89,7 @@
   - `test_settings_armoury_button`: default `"nothing"`; `"task_manager"` round-trips; `"a"`, `5`, `None` load as `"nothing"` (Review Focus 4).
   - `test_loop_resends_after_helper_restart`: fake client; action `screenshot`; tick 1 -> one call; the fake helper "restarts" (its listener forgets); tick 2 -> the call is sent again (Review Focus 1). Action `nothing` -> no calls from the loop.
   - `test_set_armoury_button`: valid id stores, saves and calls `set_button_action {"action": id}` once; unknown id -> `{"ok": False}` and nothing stored or sent; works while `_old` is True (ruling).
-  - `test_state_has_armoury_button`; `test_reset_all_keeps_armoury_button` (ruling).
+  - `test_state_has_armoury_button`; `test_reset_all_clears_armoury_button`: with `task_manager` stored, `reset_all_buttons()` stores and saves `nothing` and sends `set_button_action {"action": "nothing"}` (owner decision); it does so even when the controller writes are refused (old Overdrive).
 - [ ] **Step 2:** `X:\Projects\Decky Loader\decky-loader\backend\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=<new dir>`: the new tests FAIL.
 - [ ] **Step 3:** implement. main.py: create `ArmouryButton(self.client, lambda: self.settings.armoury_button, logger=decky.logger)` in `_main` and `start()` it right after `client.start()` (not in `_start_writes`); `stop()` it in `_unload` before the helper stops.
 - [ ] **Step 4:** full suite passes (baseline 198 plus the new tests).
@@ -111,5 +111,5 @@
 
 - [ ] Install (`tools/install-dev.ps1`, elevated). Set the row to Task Manager: one press opens it; a quick double press 1 s apart opens it twice (or focuses it).
 - [ ] Screenshot, Volume up, Alt+Tab once each, from Big Picture and from the desktop.
-- [ ] Sleep and wake, then one press works. Set Nothing: a press does nothing.
+- [ ] Sleep and wake, then one press works. Set Nothing: a press does nothing. Set Task Manager again, then Reset all buttons: the row shows Nothing and a press does nothing.
 - [ ] Kill `traction-helper.exe` once: within about 10 s a press works again.
