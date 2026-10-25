@@ -48,11 +48,15 @@ Read-only listener on every ASUS 0x0B05 HID collection of PID 0x1B4C (the keyboa
 opened: access denied, Windows owns them) plus a low-level keyboard hook. Armoury Crate SE and all ASUS services were
 running; nothing opened on any press.
 
-- **Command Center** (left side, above View): before the InitInput hello, input report `5A A6` (166, G-Helper's "cc")
-  then `5A 00` 1 ms later. After one InitInput (`5A` + "ASUS Tech.Inc."), the same press came as the key **F21**
-  (vk 0x84, scan 0x6C) down and up 4 ms apart, and no `5A A6`.
-- **Armoury Crate** (right side, below Menu): `5A EC` (236) only, no release report; the same before and after
-  InitInput. G-Helper ignores 236 (it expects 56 or 147 on the older Ally).
-- **Holds**: a 3 s and a 5 s hold each gave exactly one event at the press, the same as a quick tap. The firmware
-  sends no release timing, so a long press can't be told apart from a single press.
-- Back button + Command Center: not tested (the press only showed the plain code earlier).
+- **Command Center** (left side, above View): short press = input report `5A A6` (166, G-Helper's "cc", also
+  firmware WMI event 0xA6) then `5A 00` 1 ms later. **Long press** (the 5 s hold) = the key **F21** (vk 0x84, scan
+  0x6C) on the controller's keyboard interface, down and up 4 ms apart, and no `5A A6`. This matches
+  `X:\Projects\Armoury Crate\FINDINGS.md` ("Command Center long press"): Armoury Crate opens Armoury Crate SE on F21
+  (the owner's Shortcuts & Key Binding setting). An earlier 2-3 s hold still came as `5A A6`, so the firmware's
+  long-press time is between about 3 and 5 s. Nothing opened on F21 this time; FINDINGS saw the same once and a
+  restart of ArmouryCrateSEService fixed it. (An InitInput hello sent just before the F21 test is not the cause:
+  FINDINGS saw F21 without it.)
+- **Armoury Crate / Library** (right side, below Menu): `5A EC` (236) once per press, no release report, the same
+  before and after InitInput; a 3 s hold also gave one `5A EC` (its long press was not checked with the keyboard
+  hook). G-Helper ignores 236. FINDINGS saw no Library report in its own test, and one stray `5A EC`.
+- Back button + Command Center: not tested.
