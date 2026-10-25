@@ -36,7 +36,7 @@ def test_round_trip_and_bak(tmp_path):
     again = Settings.load(str(p))
     assert (again.controller_mode, again.grip_vibration, again.user_set) == ("auto", False, True)
     assert json.loads(p.read_text(encoding="utf-8")) == {"controller_mode": "auto", "grip_vibration": False,
-                                                         "user_set": True, "armoury_button": "nothing"}
+                                                         "user_set": True}
     assert os.path.exists(str(p) + ".bak")
 
 
@@ -202,15 +202,28 @@ def test_touched_zones_round_trip_and_junk_dropped(tmp_path):
         assert Settings.load(str(p)).touched_zones == set()
 
 
-def test_settings_armoury_button(tmp_path):
+def test_settings_library_roundtrip_and_junk(tmp_path):
     p = tmp_path / "settings.json"
     s = Settings.load(str(p))
-    assert s.armoury_button == "nothing"
-    s.armoury_button = "task_manager"
+    assert s.library == {"single": "armoury", "long": "armoury"} and s.library_written is False
+    s.library = {"single": "asus_show_desktop", "long": "esc"}
+    s.library_written = True
     s.save()
-    assert json.loads(p.read_text(encoding="utf-8"))["armoury_button"] == "task_manager"
-    assert Settings.load(str(p)).armoury_button == "task_manager"
-    for bad in ("a", "touch_keyboard", "factory", "Task_Manager", 5, None, True, ["esc"]):
-        p.write_text(json.dumps({"armoury_button": bad, "grip_vibration": False}), encoding="utf-8")
-        s = Settings.load(str(p))
-        assert s.armoury_button == "nothing" and s.grip_vibration is False, bad   # never fails, the rest kept
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    assert raw["library"] == {"single": "asus_show_desktop", "long": "esc"} and raw["library_written"] is True
+    again = Settings.load(str(p))
+    assert again.library == {"single": "asus_show_desktop", "long": "esc"} and again.library_written is True
+    # unknown ids become "armoury", the rest is kept; a stored armoury_button (first Part B) is dropped
+    p.write_text(json.dumps({"library": {"single": "nothing", "long": "win"}, "library_written": "yes",
+                             "armoury_button": "task_manager", "grip_vibration": False}), encoding="utf-8")
+    s = Settings.load(str(p))
+    assert s.library == {"single": "armoury", "long": "win"} and s.library_written is False
+    assert s.grip_vibration is False and not hasattr(s, "armoury_button")
+    s.save()
+    assert "armoury_button" not in json.loads(p.read_text(encoding="utf-8"))
+    for bad in ("esc", 5, None, ["esc"], {"single": 3}):
+        p.write_text(json.dumps({"library": bad}), encoding="utf-8")
+        assert Settings.load(str(p)).library == {"single": "armoury", "long": "armoury"}, bad
+    # nothing chosen and nothing to restore: no library keys at all
+    s = Settings.load(str(tmp_path / "other.json"))
+    assert "library" not in s.to_dict() and "library_written" not in s.to_dict()

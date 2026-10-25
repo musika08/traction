@@ -8,21 +8,19 @@ settings_file.py's. Touch Screen is not stored: it is read from Windows.
 import os
 from typing import Optional
 
-from . import armoury_button
 from . import bindings as binding_model
+from . import library as library_model
 from . import settings_file
 
 OWNER = "Traction"
 CONTROLLER_MODES = ("gamepad", "desktop", "auto")
-FIELDS = ("controller_mode", "grip_vibration", "user_set", "armoury_button")   # bindings too (compact, see to_dict)
+# bindings, touched_zones, library and library_written too (compact, see to_dict). A stored "armoury_button" (the first
+# Part B) is dropped: it is not read, and the next save leaves it out.
+FIELDS = ("controller_mode", "grip_vibration", "user_set")
 
 
 def _mode(v) -> Optional[str]:
     return v if isinstance(v, str) and v in CONTROLLER_MODES else None
-
-
-def _armoury_action(v) -> Optional[str]:
-    return v if isinstance(v, str) and v in armoury_button.ACTIONS else None
 
 
 class Settings:
@@ -37,8 +35,11 @@ class Settings:
         # Zones Traction has written custom slots to and not yet written back to the Gamepad factory set: they are
         # rewritten (factory slots where the owner has no choice) until then.
         self.touched_zones: set = set()
-        # What a press of the Armoury Crate button runs (armoury_button.ACTIONS), one for both controller modes.
-        self.armoury_button = armoury_button.NOTHING
+        # The Library button's single and long press (library.CHOICES ids); "armoury" keeps Armoury Crate's setting.
+        self.library = library_model.default_library()
+        # True while the controller may hold a Library choice of Traction's: once both presses are back to "armoury",
+        # the reports are written once more with Armoury Crate's setting, then this is False.
+        self.library_written = False
         self.logger = None
         self._reset_note = ""               # why the file was reset (shown in get_state)
         self._unreadable_pending = False    # the unreadable file is still on disk with no copy kept yet
@@ -72,9 +73,9 @@ class Settings:
             self.grip_vibration = raw["grip_vibration"]
         if isinstance(raw.get("user_set"), bool):
             self.user_set = raw["user_set"]
-        action = _armoury_action(raw.get("armoury_button"))
-        if action is not None:
-            self.armoury_button = action
+        self.library = library_model.clean(raw.get("library"))   # unknown ids are "armoury", never fails
+        if isinstance(raw.get("library_written"), bool):
+            self.library_written = raw["library_written"]
         self.bindings = binding_model.clean(raw.get("bindings"))   # unknown ids drop to factory, never fails
         zones = raw.get("touched_zones")
         if isinstance(zones, list):
@@ -92,6 +93,11 @@ class Settings:
             out["bindings"] = stored
         if self.touched_zones:
             out["touched_zones"] = sorted(self.touched_zones)
+        lib = library_model.clean(self.library)
+        if library_model.chosen(lib):
+            out["library"] = lib
+        if self.library_written:
+            out["library_written"] = True
         return out
 
     def save(self) -> None:

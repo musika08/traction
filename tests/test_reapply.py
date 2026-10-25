@@ -386,3 +386,71 @@ def test_reapply_on_standby_wake(tmp_path):
         wake.value = 13050
         assert await r.tick() is False
     run(go())
+
+
+# ---------- the Library button ----------
+
+def press_calls(c):
+    return [x for x in c.calls if x[0] == "set_press_bindings"]
+
+
+def test_reapply_writes_press_bindings_when_chosen(tmp_path):
+    async def go():
+        c = _controller_client()
+        s = make(tmp_path, library={"single": "asus_task_manager", "long": "armoury"})
+        r = Reapplier(c, s, clock=Clock(), power_source=Power())
+        r.library_allowed = lambda: True
+        assert await r.apply_all() is True
+        # after the controller writes; the registry is unreadable in tests: Armoury Crate's defaults elsewhere
+        assert c.writes() == [("set_controller_mode", {"mode": "gamepad"}), ("set_vibration", {"strength": 100}),
+                              ("set_press_bindings", {
+                                  "single": ["05-00-1A-00-00-00-00-00-00", "05-00-17-00-00-00-00-00-00"],
+                                  "long": ["05-00-16-00-00-00-00-00-00", "05-00-04-00-00-00-00-00-00"]})]
+        assert r.warning == ""
+        c.calls.clear()
+        await r.apply_all()   # every reapply while chosen
+        assert len(press_calls(c)) == 1
+        # no controller found: nothing
+        c2 = _controller_client(found=False)
+        await Reapplier(c2, s, clock=Clock(), power_source=Power()).apply_all()
+        assert press_calls(c2) == []
+    run(go())
+
+
+def test_reapply_no_press_bindings_while_armoury_runs(tmp_path):
+    async def go():
+        c = _controller_client()
+        s = make(tmp_path, library={"single": "esc", "long": "esc"}, library_written=True)
+        r = Reapplier(c, s, clock=Clock(), power_source=Power())
+        r.library_allowed = lambda: False
+        await r.apply_all()
+        assert press_calls(c) == [] and c.writes() != []
+    run(go())
+
+
+def test_reapply_reset_restores_once(tmp_path):
+    async def go():
+        c = _controller_client()
+        s = make(tmp_path, library_written=True)
+        r = Reapplier(c, s, clock=Clock(), power_source=Power())
+        r.library_allowed = lambda: True
+        await r.apply_all()
+        assert len(press_calls(c)) == 1 and s.library_written is False
+        await r.apply_all()
+        await r.apply_all()
+        assert len(press_calls(c)) == 1
+    run(go())
+
+
+def test_reapply_reports_a_press_bindings_refusal(tmp_path):
+    async def go():
+        c = _controller_client()
+
+        async def refuse(args):
+            return {"id": 1, "ok": False, "message": "Refused: unknown press binding 'x'.", "data": None}
+        c.handlers["set_press_bindings"] = refuse
+        s = make(tmp_path, library={"single": "esc", "long": "armoury"})
+        r = Reapplier(c, s, clock=Clock(), power_source=Power())
+        await r.apply_all()
+        assert r.warning == "Refused: unknown press binding 'x'."
+    run(go())

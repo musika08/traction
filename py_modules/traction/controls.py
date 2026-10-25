@@ -15,7 +15,7 @@ import logging
 import time
 from typing import Optional
 
-from . import bindings
+from . import bindings, library
 from .helper_client import is_transport_failure
 from .settings import CONTROLLER_MODES, Settings
 
@@ -27,6 +27,7 @@ BINDINGS_TIMEOUT = 20.0
 clock = time.monotonic          # tests replace it
 _touch = {"at": None, "value": None, "want": None, "until": None}
 _bindings_logged: set = set()   # binding-write failures already logged (once per kind until a write lands)
+_press_logged: set = set()      # Library button write failures already logged (once each until a write lands)
 _bindings_calls = [0]           # set_bindings calls in flight (get_state reads nothing meanwhile)
 
 # A reply that failed on the way (helper restarted, did not answer, not running), not a device refusal.
@@ -36,6 +37,7 @@ transport_failure = is_transport_failure
 def reset_cache() -> None:
     _touch.update(at=None, value=None, want=None, until=None)
     _bindings_logged.clear()
+    _press_logged.clear()
 
 
 def bindings_in_flight() -> bool:
@@ -185,6 +187,43 @@ async def apply_bindings(client, settings: Settings, mode: str, logger: Optional
         except OSError as e:
             (logger or logging.getLogger("traction")).error(f"Could not save the button bindings: {e}")
     return r
+
+
+async def apply_press_bindings(client, settings: Settings, allowed: bool, read=None,
+                               logger: Optional[logging.Logger] = None) -> dict:
+    """The Library button's single and long press reports (helper set_press_bindings), with Armoury Crate's setting
+    for every "armoury" press and always for Command Center (`read`: the registry reader, library.armoury_ids).
+
+    No call when not `allowed` (Armoury Crate is running, or an old Overdrive drives the controller), nor when both
+    presses are "armoury" and settings.library_written is False. Both "armoury" with library_written True is the
+    restore after a Reset: written once, then library_written goes False. A choice sets library_written True even when
+    its write failed (it may have landed). library_written is saved when it changes. `written` is True when the
+    reports were sent and accepted."""
+    if not allowed:
+        return _result(True, "", written=False)
+    want = library.chosen(settings.library)
+    if not want and not settings.library_written:
+        return _result(True, "", written=False)
+    args = library.slots(settings.library, library.armoury_ids(read))
+    r = await client.call("set_press_bindings", args)
+    before = settings.library_written
+    if r.get("ok"):
+        settings.library_written = want
+    elif want:
+        settings.library_written = True
+    if settings.library_written != before:
+        try:
+            settings.save()
+        except OSError as e:
+            (logger or logging.getLogger("traction")).error(f"Could not save the Library button state: {e}")
+    if not r.get("ok"):
+        message = _msg(r, "The Library button was not changed.")
+        if message not in _press_logged:
+            _press_logged.add(message)
+            (logger or logging.getLogger("traction")).warning(f"Library button: not written: {message}")
+        return _result(False, message, written=False, transport=transport_failure(r))
+    _press_logged.clear()
+    return _result(True, "", written=True)
 
 
 async def apply_controller(client, settings: Settings, mode: Optional[str] = None,

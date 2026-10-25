@@ -46,6 +46,8 @@ def reply(req):
         return {"id": req.get("id"), "ok": True, "message": "", "data": {"startTypes": {}, "running": []}}
     if cmd == "set_bindings":
         return {"id": req.get("id"), "ok": True, "message": "", "data": {"zone": args.get("zone")}}
+    if cmd == "set_press_bindings":
+        return {"id": req.get("id"), "ok": True, "message": "", "data": {"written": ["single", "long"]}}
     return {"id": req.get("id"), "ok": False, "message": "Refused: unknown command '%s'." % cmd, "data": None}
 
 
@@ -154,6 +156,8 @@ class FakeClient:
             return ok({"found": False, "enabled": False, "instanceId": ""})
         if cmd == "set_bindings":
             return bindings_reply(self.bindings_reply, args)
+        if cmd == "set_press_bindings":   # helper/src/TractionCore.cs SetPressBindings
+            return ok({"written": ["single", "long"]})
         return ok(dict(args))
 
 

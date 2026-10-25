@@ -3,11 +3,10 @@
 import os
 import re
 
-from traction import armoury_button, bindings
+from traction import bindings
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BINDINGS_CS = os.path.join(ROOT, "helper", "src", "Bindings.cs")
-BUTTON_ACTIONS_CS = os.path.join(ROOT, "helper", "src", "ButtonActions.cs")
 
 
 def _block(name: str) -> str:
@@ -41,13 +40,3 @@ def test_factory_zones_match_gamepad_defaults():
     rows = re.findall(r"new\[\]\s*\{([^}]*)\}", _block("GamepadDefaults"))
     assert [_codes(r) for r in rows] == [bindings.zone_slots(z, {}, "gamepad") for z in bindings.all_zones()]
 
-
-def test_actions_match_helper():
-    """The Armoury Crate button's actions: ButtonActions.Ids, in order, are armoury_button.ACTIONS."""
-    with open(BUTTON_ACTIONS_CS, encoding="utf-8") as f:
-        src = f.read()
-    m = re.search(r"\bIds\s*=\s*\{(.*?)\};", src, re.S)
-    assert m, "Ids not found in ButtonActions.cs"
-    ids = re.findall(r'"([a-z_]+)"', m.group(1))
-    assert len(ids) == len(set(ids)), "duplicate id in ButtonActions.Ids"
-    assert tuple(ids) == armoury_button.ACTIONS

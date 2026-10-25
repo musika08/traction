@@ -460,3 +460,85 @@ def test_reset_reply_clears_both_sets_and_switches(tmp_path):
         assert s.bindings == FACTORY and s.touched_zones == set()
         assert Settings.load(s.path).bindings == FACTORY
     run(go())
+
+
+# ---------- the Library button (apply_press_bindings) ----------
+
+OWNER_IDS = {"LibBtnSFunctId": 33, "LibBtnLFunctId": 8, "CCBtnSFunctId": 9, "CCBtnLFunctId": 10}
+
+
+def owner_registry(name):
+    return OWNER_IDS[name]
+
+
+def press_calls(c):
+    return [x for x in c.calls if x[0] == "set_press_bindings"]
+
+
+def test_press_bindings_written_when_chosen(tmp_path):
+    async def go():
+        c = FakeClient()
+        s = settings(tmp_path, library={"single": "asus_show_desktop", "long": "esc"})
+        r = await controls.apply_press_bindings(c, s, True, read=owner_registry)
+        assert r["ok"] and r["written"]
+        assert press_calls(c) == [("set_press_bindings", {
+            "single": ["05-00-1C-00-00-00-00-00-00", "05-00-17-00-00-00-00-00-00"],
+            "long": ["04-00-00-01-76-00-00-00-00", "05-00-04-00-00-00-00-00-00"]})]
+        assert s.library_written is True and Settings.load(s.path).library_written is True
+        # written again every time while chosen (the controller forgets them on sleep)
+        await controls.apply_press_bindings(c, s, True, read=owner_registry)
+        assert len(press_calls(c)) == 2
+    run(go())
+
+
+def test_press_bindings_nothing_chosen_no_call(tmp_path):
+    async def go():
+        c = FakeClient()
+        s = settings(tmp_path)
+        r = await controls.apply_press_bindings(c, s, True, read=owner_registry)
+        assert r == {"ok": True, "message": "", "written": False} and c.calls == []
+    run(go())
+
+
+def test_press_bindings_not_while_armoury_runs(tmp_path):
+    async def go():
+        c = FakeClient()
+        s = settings(tmp_path, library={"single": "esc", "long": "armoury"}, library_written=True)
+        r = await controls.apply_press_bindings(c, s, False, read=owner_registry)
+        assert r["ok"] and not r["written"] and c.calls == []
+        s.library = {"single": "armoury", "long": "armoury"}
+        await controls.apply_press_bindings(c, s, False, read=owner_registry)
+        assert c.calls == [] and s.library_written is True   # the restore waits until writes are allowed
+    run(go())
+
+
+def test_reset_writes_once_then_stops(tmp_path):
+    async def go():
+        c = FakeClient()
+        s = settings(tmp_path, library={"single": "armoury", "long": "armoury"}, library_written=True)
+        r = await controls.apply_press_bindings(c, s, True, read=owner_registry)
+        assert r["ok"] and r["written"]
+        assert press_calls(c) == [("set_press_bindings", {
+            "single": ["04-00-00-03-8C-88-76-00-00", "05-00-17-00-00-00-00-00-00"],
+            "long": ["05-00-28-00-00-00-00-00-00", "05-00-04-00-00-00-00-00-00"]})]
+        assert s.library_written is False and Settings.load(s.path).library_written is False
+        c.calls.clear()
+        for _ in range(3):
+            await controls.apply_press_bindings(c, s, True, read=owner_registry)
+        assert c.calls == []
+    run(go())
+
+
+def test_press_bindings_failure(tmp_path):
+    async def go():
+        c = FakeClient()
+        c.handlers["set_press_bindings"] = handler(fail(RESTARTED))
+        s = settings(tmp_path, library={"single": "esc", "long": "armoury"})
+        r = await controls.apply_press_bindings(c, s, True, read=owner_registry)
+        assert r["ok"] is False and r["message"] == RESTARTED and r["transport"] is True
+        assert s.library_written is True    # it may have landed: a later Reset restores
+        # a failed restore keeps the restore pending
+        s.library = {"single": "armoury", "long": "armoury"}
+        r = await controls.apply_press_bindings(c, s, True, read=owner_registry)
+        assert r["ok"] is False and s.library_written is True
+    run(go())
