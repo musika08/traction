@@ -40,7 +40,7 @@ namespace Traction.Helper
             { "get_touchscreen", None },
             { "set_touchscreen", new[] { "enabled" } },
             { "set_bindings", new[] { "zone", "slots", "watch" } },
-            { "set_button_action", new[] { "action" } },
+            { "set_press_bindings", new[] { "single", "long" } },
         };
 
         private static readonly string[] TopLevel = { "id", "cmd", "args" };
@@ -67,10 +67,6 @@ namespace Traction.Helper
         // Whether Windows still sees the gamepad (set_bindings' safety net). Set after construction; null means
         // set_bindings is not available.
         public IPadCheck PadCheck { get; set; }
-
-        // The Armoury Crate button reader (ButtonListener.cs). Set after construction; null means set_button_action is
-        // not available.
-        public ButtonListener ButtonListener { get; set; }
 
         public const string PadNotSeenMessage = "Windows does not see the gamepad, so the buttons were not changed.";
 
@@ -167,7 +163,7 @@ namespace Traction.Helper
                 case "get_touchscreen": return GetTouchscreen(id);
                 case "set_touchscreen": return SetTouchscreen(id, args);
                 case "set_bindings": return SetBindings(id, args);
-                case "set_button_action": return SetButtonAction(id, args);
+                case "set_press_bindings": return SetPressBindings(id, args);
             }
             return ProtocolKit.Reply(id, false, "Refused: unknown command '" + cmd + "'.", null);
         }
@@ -379,28 +375,45 @@ namespace Traction.Helper
             return ProtocolKit.Reply(id, false, Bindings.ResetMessage, reset);
         }
 
-        // ---------- Armoury Crate button ----------
+        // ---------- Library button (single and long press; see PressBindings.cs) ----------
 
-        // Sets the action the Armoury Crate button runs; the same action again is a no-op. Read only on the
-        // controller: the reader never writes to it.
-        private string SetButtonAction(object id, Dictionary<string, object> args)
+        // Writes the single press report, then the long press report, each with the Library and Command Center slots.
+        // Every slot is checked before anything is written. Unwatched (no gamepad check): these are not gamepad zones.
+        private string SetPressBindings(object id, Dictionary<string, object> args)
         {
-            object raw;
-            if (!args.TryGetValue("action", out raw)) return ProtocolKit.Reply(id, false, "Refused: 'action' is required.", null);
-            string action = raw as string;
-            if (action == null || ButtonActions.Steps(action) == null)
-            {
-                string shown = action ?? Convert.ToString(raw, System.Globalization.CultureInfo.InvariantCulture);
-                return ProtocolKit.Reply(id, false, "Refused: unknown button action '" + shown + "'.", null);
-            }
-            if (ButtonListener == null) return ProtocolKit.Reply(id, false, ControllerUnavailable, null);
-            ButtonListener.SetAction(action);
+            string[] single, longPress;
+            string err;
+            if (!GetPressPair(args, "single", out single, out err)) return ProtocolKit.Reply(id, false, err, null);
+            if (!GetPressPair(args, "long", out longPress, out err)) return ProtocolKit.Reply(id, false, err, null);
+            if (Hid == null) return ProtocolKit.Reply(id, false, ControllerUnavailable, null);
+            err = SendReports(true,
+                PressBindings.Report(PressBindings.SingleCommand, single[0], single[1]),
+                PressBindings.Report(PressBindings.LongCommand, longPress[0], longPress[1]));
+            if (err != null) return ProtocolKit.Reply(id, false, err, null);
             var d = new Dictionary<string, object>();
-            d["action"] = ButtonListener.Action;
-            d["running"] = ButtonListener.Running;
-            d["open"] = ButtonListener.IsOpen;
-            d["last_error"] = ButtonListener.LastError;
+            d["written"] = new[] { "single", "long" };
             return ProtocolKit.Reply(id, true, "", d);
+        }
+
+        // args[key] must be [libSlot, ccSlot], both allowed press binding slots.
+        private static bool GetPressPair(Dictionary<string, object> args, string key, out string[] pair, out string err)
+        {
+            pair = null;
+            err = null;
+            object raw;
+            if (!args.TryGetValue(key, out raw)) { err = "Refused: '" + key + "' is required."; return false; }
+            var list = raw as object[];
+            string shape = "Refused: '" + key + "' must be a list of 2 press bindings.";
+            if (list == null || list.Length != 2) { err = shape; return false; }
+            var p = new string[2];
+            for (int i = 0; i < 2; i++)
+            {
+                p[i] = list[i] as string;
+                if (p[i] == null) { err = shape; return false; }
+                if (!PressBindings.IsAllowedSlot(p[i])) { err = "Refused: unknown press binding '" + p[i] + "'."; return false; }
+            }
+            pair = p;
+            return true;
         }
 
         // ---------- touchscreen and foreground app ----------

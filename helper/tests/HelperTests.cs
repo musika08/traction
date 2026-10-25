@@ -955,371 +955,144 @@ namespace Traction.Helper.Tests
             Equal(0, rig.Sys.TouchSets.Count, "no touch change");
         }
 
-        // ---------- Armoury Crate button (ButtonActions, ButtonListener, set_button_action) ----------
+        // ---------- Library button (set_press_bindings; see PressBindings.cs) ----------
 
-        private static readonly byte[] Ec = { 0x5A, 0xEC };
+        private const string LibShortcut = "04-00-00-03-8C-88-76-00-00";   // the device check's Library single press
+        private const string CcCenter = "05-00-17-00-00-00-00-00-00";      // Command Center single press (installed default)
+        private const string LibLong = "05-00-28-00-00-00-00-00-00";       // the device check's Library long press
+        private const string CcLong = "05-00-04-00-00-00-00-00-00";        // Command Center long press (installed default)
 
-        private class ListenRig
+        // The single press report the 2026-10-25 device check wrote and the controller accepted.
+        private static readonly byte[] SingleBytes = Padded(64,
+            0x5A, 0xD1, 0x1D, 0x01, 0x12, 0x04, 0x00, 0x00, 0x03, 0x8C, 0x88, 0x76, 0x00, 0x00,
+            0x05, 0x00, 0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+
+        // The long press report the device check wrote.
+        private static readonly byte[] LongBytes = Padded(64,
+            0x5A, 0xD1, 0x23, 0x01, 0x12, 0x05, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x05, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+
+        private static string PressLine(int id, string single, string longPress)
         {
-            public FakeReportSource Source = new FakeReportSource();
-            public FakeInputSender Sender = new FakeInputSender();
-            public DateTime Now = new DateTime(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
-            private readonly List<int> waits = new List<int>();
-            public ButtonListener Listener;
+            return "{\"id\":" + id + ",\"cmd\":\"set_press_bindings\",\"args\":{\"single\":" + single + ",\"long\":" + longPress + "}}";
+        }
 
-            public ListenRig()
+        private static string Pair(string a, string b) { return "[\"" + a + "\",\"" + b + "\"]"; }
+
+        public static void PressBindings_Report_Single()
+        {
+            byte[] r = PressBindings.Report(0x1D, LibShortcut, CcCenter);
+            Equal(23, r.Length, "5 header bytes and two 9-byte slots");
+            Equal(Hex(SingleBytes), Hex(Padded(64, r)), "single report");
+            Equal(Hex(LongBytes), Hex(Padded(64, PressBindings.Report(0x23, LibLong, CcLong))), "long report");
+        }
+
+        public static void PressBindings_AllowsFunctionAndKeys()
+        {
+            foreach (string code in new[] { "01", "02", "03", "04", "16", "17", "19", "1A", "1C", "1E", "26", "27", "28" })
+                True(PressBindings.IsAllowedSlot("05-00-" + code + "-00-00-00-00-00-00"), "ASUS action " + code);
+            True(PressBindings.IsAllowedSlot("04-00-00-01-76-00-00-00-00"), "Esc key");
+            True(PressBindings.IsAllowedSlot("04-00-00-02-8A-0C-00-00-00"), "Alt+F4");
+            True(PressBindings.IsAllowedSlot(LibShortcut), "three-key shortcut");
+            // Every key byte of Bindings' allow-listed key and shortcut codes is allowed as a key slot.
+            foreach (string code in Bindings.Allowed)
             {
-                Listener = new ButtonListener(Source, Sender, () => Now, ms => { lock (waits) waits.Add(ms); });
+                string[] p = code.Split('-');
+                if (p[0] == "02") True(PressBindings.IsAllowedSlot("04-00-00-01-" + p[1] + "-00-00-00-00"), "key of " + code);
             }
-
-            public List<int> Waits { get { lock (waits) return new List<int>(waits); } }
         }
 
-        // Polls cond every 10 ms for up to ms; true when it held.
-        private static bool WaitUntil(Func<bool> cond, int ms)
+        public static void PressBindings_RefusesBad()
         {
-            DateTime end = DateTime.UtcNow.AddMilliseconds(ms);
-            while (DateTime.UtcNow < end)
-            {
-                if (cond()) return true;
-                Thread.Sleep(10);
-            }
-            return cond();
+            foreach (string slot in new[] {
+                "05-00-99-00-00-00-00-00-00",          // not an ASUS action code
+                "05-00-00-00-00-00-00-00-00",          // no action
+                "05-01-1C-00-00-00-00-00-00",          // byte 1 not zero
+                "05-00-1C-00-00-00-00-00-01",          // trailing byte not zero
+                "04-00-00-04-8C-88-8A-05-00",          // four keys
+                "04-00-00-00-00-00-00-00-00",          // no keys
+                "04-00-00-01-00-00-00-00-00",          // a zero key
+                "04-00-00-01-76-0D-00-00-00",          // a key past n
+                "04-00-00-02-8A-FF-00-00-00",          // a key byte Bindings does not allow
+                "04-01-00-01-76-00-00-00-00",          // byte 1 not zero
+                "04-00-00-01-76-00-00-00",             // 8 bytes
+                "04-00-00-01-76-00-00-00-00-00",       // 10 bytes
+                "01-02-00-00-00-00-00-00-00",          // a gamepad button
+                "00-00-00-00-00-00-00-00-00",          // nothing
+                "05-00-1c-00-00-00-00-00-00",          // lower case
+                "05-00-1C-00-00-00-00-00-0",           // short byte
+                "05 00 1C 00 00 00 00 00 00",
+                "",
+                null })
+                True(!PressBindings.IsAllowedSlot(slot), "refused: " + (slot ?? "null"));
         }
 
-        public static void ButtonActions_IdsMatchPlan()
-        {
-            SeqEqual(new[] { "nothing", "mouse_left", "mouse_right", "mouse_middle", "scroll_up", "scroll_down", "esc",
-                "enter", "tab", "backspace", "space", "up", "down", "left", "right", "page_up", "page_down", "win",
-                "show_desktop", "screenshot", "task_manager", "close_window", "alt_tab", "win_tab", "volume_up",
-                "volume_down" }, ButtonActions.Ids, "action ids");
-            foreach (string id in ButtonActions.Ids)
-            {
-                True(ButtonActions.Steps(id) != null, id + " has steps");
-                if (id != "nothing") True(ButtonActions.Steps(id).Count > 0, id + " sends something");
-            }
-            SeqEqual(new[] { "down 0x11", "down 0x10", "down 0x1B", "up 0x1B", "up 0x10", "up 0x11" },
-                ButtonActions.Describe("task_manager"), "task manager");
-            SeqEqual(new[] { "down 0x12", "down 0x73", "up 0x73", "up 0x12" }, ButtonActions.Describe("close_window"), "Alt+F4");
-            SeqEqual(new[] { "down 0x5B", "down 0x44", "up 0x44", "up 0x5B" }, ButtonActions.Describe("show_desktop"), "Win+D");
-            SeqEqual(new[] { "down 0xAF", "up 0xAF" }, ButtonActions.Describe("volume_up"), "volume up");
-            SeqEqual(new[] { "mouse left down", "mouse left up" }, ButtonActions.Describe("mouse_left"), "left click");
-            SeqEqual(new[] { "mouse right down", "mouse right up" }, ButtonActions.Describe("mouse_right"), "right click");
-            SeqEqual(new[] { "mouse middle down", "mouse middle up" }, ButtonActions.Describe("mouse_middle"), "middle click");
-        }
-
-        public static void ButtonActions_Screenshot()
-        {
-            SeqEqual(new[] { "down 0x5B", "down 0x10", "down 0x53", "up 0x53", "up 0x10", "up 0x5B" },
-                ButtonActions.Describe("screenshot"), "Win+Shift+S");
-        }
-
-        public static void ButtonActions_ArrowIsExtended()
-        {
-            IList<InputStep> up = ButtonActions.Steps("up");
-            Equal(2, up.Count, "down and up");
-            Equal((ushort)0x26, up[0].Vk, "vk");
-            True(!up[0].Up && up[1].Up, "down then up");
-            True(up[0].Extended && up[1].Extended, "arrows are extended keys");
-            True(!up[0].Mouse, "a key, not the mouse");
-            True(ButtonActions.Steps("page_down")[0].Extended, "Page Down is extended");
-            IList<InputStep> enter = ButtonActions.Steps("enter");
-            Equal((ushort)0x0D, enter[0].Vk, "enter vk");
-            True(!enter[0].Extended && !enter[1].Extended, "Enter is not extended");
-        }
-
-        public static void ButtonActions_ScrollDown()
-        {
-            SeqEqual(new[] { "wheel -120" }, ButtonActions.Describe("scroll_down"), "scroll down");
-            SeqEqual(new[] { "wheel 120" }, ButtonActions.Describe("scroll_up"), "scroll up");
-            Equal(0, ButtonActions.Steps("nothing").Count, "nothing sends nothing");
-            True(ButtonActions.Steps("a") == null, "a gamepad button is not an action");
-            True(ButtonActions.Steps("touch_keyboard") == null, "no touch keyboard");
-            True(ButtonActions.Steps(null) == null, "null id");
-            True(ButtonActions.Describe("a") == null, "unknown id described as null");
-        }
-
-        public static void InputSender_Win32LayoutX64()
-        {
-            Equal(40, Win32InputSender.InputSize(), "INPUT is 40 bytes on x64");
-        }
-
-        public static void Listener_OnlyEcFires()
-        {
-            var rig = new ListenRig();
-            try
-            {
-                rig.Listener.SetAction("enter");
-                True(rig.Listener.Handle(Ec), "5A EC fires");
-                Equal(1, rig.Sender.Count, "one send");
-                Equal("down 0x0D, up 0x0D", rig.Sender.Sends[0], "the chosen action");
-                rig.Now = rig.Now.AddSeconds(5);
-                True(!rig.Listener.Handle(new byte[] { 0x5A, 0xA6 }), "5A A6 ignored");
-                True(!rig.Listener.Handle(new byte[] { 0x5A, 0x00 }), "5A 00 ignored");
-                True(!rig.Listener.Handle(new byte[] { 0x5D, 0xEC }), "5D EC ignored");
-                True(!rig.Listener.Handle(new byte[] { 0x5A }), "short report ignored");
-                True(!rig.Listener.Handle(new byte[0]), "empty report ignored");
-                True(!rig.Listener.Handle(null), "null report ignored");
-                Equal(1, rig.Sender.Count, "still one send");
-                True(rig.Listener.Handle(new byte[] { 0x5A, 0xEC, 0x00, 0x00 }), "5A EC with padding fires");
-            }
-            finally { rig.Listener.SetAction("nothing"); }
-        }
-
-        public static void Listener_SenderErrorCaught()
-        {
-            var rig = new ListenRig();
-            rig.Sender.Throw = true;
-            try
-            {
-                rig.Listener.SetAction("esc");
-                True(rig.Listener.Handle(Ec), "fired even though the send failed");
-                rig.Now = rig.Now.AddSeconds(1);
-                rig.Source.Push(Ec);
-                True(WaitUntil(() => rig.Sender.Count == 2, 3000), "the reader thread sent the pushed press");
-                True(rig.Listener.Running, "a send failure does not end the reader");
-            }
-            finally { rig.Listener.SetAction("nothing"); }
-        }
-
-        public static void Listener_Bounce()
-        {
-            var rig = new ListenRig();
-            try
-            {
-                rig.Listener.SetAction("space");
-                DateTime t = rig.Now;
-                True(rig.Listener.Handle(Ec), "first press fires");
-                rig.Now = t.AddSeconds(0.2);
-                True(!rig.Listener.Handle(Ec), "a repeat 0.2 s later is ignored");
-                rig.Now = t.AddSeconds(0.7);
-                True(rig.Listener.Handle(Ec), "0.7 s later fires");
-                rig.Now = t.AddSeconds(6.0);
-                True(rig.Listener.Handle(Ec), "the release report after a long hold fires (known limit)");
-                Equal(3, rig.Sender.Count, "three sends");
-            }
-            finally { rig.Listener.SetAction("nothing"); }
-        }
-
-        public static void Listener_NothingStops()
-        {
-            var rig = new ListenRig();
-            Equal("nothing", rig.Listener.Action, "starts as nothing");
-            True(!rig.Listener.Running, "no reader before an action");
-            rig.Listener.SetAction("task_manager");
-            True(rig.Listener.Running, "reader running");
-            True(WaitUntil(() => rig.Source.IsOpen, 2000), "collection opened");
-            rig.Listener.SetAction("task_manager");
-            Equal(1, rig.Listener.Opens, "the same action again is a no-op");
-            rig.Listener.SetAction("nothing");
-            True(WaitUntil(() => !rig.Listener.Running, 1000), "reader ended within 1 s");
-            True(!rig.Source.IsOpen && rig.Source.Closes >= 1, "collection closed");
-            Equal("nothing", rig.Listener.Action, "action");
-            True(!rig.Listener.Handle(Ec), "a later press does nothing");
-            rig.Source.Push(Ec);
-            Thread.Sleep(50);
-            Equal(0, rig.Sender.Count, "nothing sent");
-            int opens = rig.Source.OpenCalls;
-            Thread.Sleep(50);
-            Equal(opens, rig.Source.OpenCalls, "no reopen after nothing");
-        }
-
-        public static void Listener_ReopensAfterReadFailure()
-        {
-            var rig = new ListenRig();
-            rig.Source.OpenResults.Enqueue(true);
-            rig.Source.OpenResults.Enqueue(false);
-            rig.Source.Push(new IOException("The device is not connected."));
-            rig.Source.Push(Ec);
-            try
-            {
-                rig.Listener.SetAction("win");
-                True(WaitUntil(() => rig.Sender.Count == 1, 3000), "the press after the reopen fired");
-                Equal("down 0x5B, up 0x5B", rig.Sender.Sends[0], "the chosen action");
-                Equal(2, rig.Listener.Opens, "opened twice (the failed open does not count)");
-                Equal(3, rig.Source.OpenCalls, "three open attempts");
-                True(rig.Waits.Contains(2000), "waited 2000 ms before reopening");
-                True(rig.Waits.TrueForAll(ms => ms == 2000), "every wait is 2000 ms: " + string.Join(",", rig.Waits));
-                Equal(2, rig.Waits.Count, "one wait after the read failure, one after the failed open");
-                True(rig.Listener.Running, "still running");
-            }
-            finally { rig.Listener.SetAction("nothing"); }
-            True(WaitUntil(() => !rig.Listener.Running, 1000), "stopped");
-        }
-
-        public static void ButtonActions_WithScanFillsScanCode()
-        {
-            var asked = new List<uint>();
-            Func<uint, uint> map = vk =>
-            {
-                asked.Add(vk);
-                switch (vk)
-                {
-                    case 0x0D: return 0x1C;      // Enter
-                    case 0x5B: return 0xE05B;    // left Windows key (E0)
-                    case 0x26: return 0xE048;    // Up (E0)
-                    case 0xAF: return 0xE030;    // Volume Up (E0)
-                    case 0x13: return 0xE11D;    // Pause (E1, not E0)
-                }
-                return 0;
-            };
-            InputStep enter = ButtonActions.WithScan(ButtonActions.Steps("enter")[0], map);
-            Equal((ushort)0x0D, enter.Vk, "the virtual key stays");
-            Equal((ushort)0x1C, enter.Scan, "Enter scan code");
-            True(!enter.Extended, "Enter is not extended");
-            InputStep win = ButtonActions.WithScan(ButtonActions.Steps("win")[1], map);
-            Equal((ushort)0x5B, win.Scan, "Win scan code without the E0 byte");
-            True(win.Extended && win.Up, "E0 sets the extended flag; up stays up");
-            InputStep vol = ButtonActions.WithScan(ButtonActions.Steps("volume_up")[0], map);
-            True(vol.Extended && vol.Scan == 0x30, "Volume Up: E0 30, extended");
-            InputStep up = ButtonActions.WithScan(ButtonActions.Steps("up")[0], v => 0x48);
-            True(up.Extended && up.Scan == 0x48, "an arrow stays extended even when the mapper gives no E0");
-            InputStep pause = ButtonActions.WithScan(new InputStep { Vk = 0x13 }, map);
-            True(!pause.Extended && pause.Scan == 0x1D, "an E1 prefix is not the extended flag");
-            InputStep none = ButtonActions.WithScan(new InputStep { Vk = 0x07 }, map);
-            True(!none.Extended && none.Scan == 0, "no scan code: 0, not extended");
-            int before = asked.Count;
-            InputStep click = ButtonActions.WithScan(ButtonActions.Steps("mouse_left")[0], map);
-            Equal(before, asked.Count, "a mouse step is not mapped");
-            True(click.Mouse && click.Scan == 0 && !click.Extended, "a mouse step is unchanged");
-        }
-
-        public static void Listener_EmptyReadIsAFailedRead()
-        {
-            var rig = new ListenRig();
-            rig.Source.Push(new byte[0]);
-            rig.Source.Push(Ec);
-            try
-            {
-                rig.Listener.SetAction("esc");
-                True(WaitUntil(() => rig.Sender.Count == 1, 3000), "the press after the reopen fired");
-                Equal(2, rig.Listener.Opens, "an empty read closes and reopens");
-                True(rig.Source.Closes >= 1, "closed after the empty read");
-                True(rig.Waits.Count == 1 && rig.Waits[0] == 2000, "one 2000 ms wait before reopening: " + string.Join(",", rig.Waits));
-                True(rig.Listener.LastError.Contains("empty"), "last error says empty: " + rig.Listener.LastError);
-            }
-            finally { rig.Listener.SetAction("nothing"); }
-        }
-
-        public static void Listener_OpenAndLastError()
-        {
-            var rig = new ListenRig();
-            Equal("", rig.Listener.LastError, "no error at first");
-            True(!rig.Listener.IsOpen, "not open before an action");
-            rig.Source.OpenResults.Enqueue(false);
-            try
-            {
-                rig.Listener.SetAction("esc");
-                True(WaitUntil(() => rig.Listener.IsOpen, 3000), "open after the retry");
-                True(rig.Listener.LastError.Contains("open"), "the failed open is the last error: " + rig.Listener.LastError);
-                rig.Source.Push(new IOException("The device is not connected."));
-                True(WaitUntil(() => rig.Listener.LastError.Contains("not connected"), 3000),
-                    "the read failure is the last error: " + rig.Listener.LastError);
-                True(WaitUntil(() => rig.Listener.IsOpen, 3000), "open again after the reopen");
-                rig.Sender.Throw = true;
-                rig.Source.Push(Ec);
-                True(WaitUntil(() => rig.Listener.LastError.Contains("SendInput failed"), 3000),
-                    "the send failure is the last error: " + rig.Listener.LastError);
-            }
-            finally { rig.Listener.SetAction("nothing"); }
-            True(!rig.Listener.IsOpen, "not open after nothing");
-        }
-
-        private static ListenRig AttachListener(Rig rig)
-        {
-            var l = new ListenRig();
-            rig.Core.ButtonListener = l.Listener;
-            return l;
-        }
-
-        public static void SetButtonAction_RefusesUnknown()
+        public static void SetPressBindings_WritesSingleThenLong()
         {
             var rig = new Rig();
-            ListenRig l = AttachListener(rig);
-            var r = rig.Send("{\"id\":1,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"a\"}}");
-            True(!Ok(r), "unknown refused");
-            Equal("Refused: unknown button action 'a'.", Msg(r), "message");
-            r = rig.Send("{\"id\":2,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"touch_keyboard\"}}");
-            Equal("Refused: unknown button action 'touch_keyboard'.", Msg(r), "touch keyboard refused");
-            r = rig.Send("{\"id\":3,\"cmd\":\"set_button_action\",\"args\":{\"action\":5}}");
-            True(!Ok(r) && Msg(r).StartsWith("Refused: unknown button action"), "non-text refused: " + Msg(r));
-            r = rig.Send("{\"id\":4,\"cmd\":\"set_button_action\",\"args\":{}}");
-            True(!Ok(r) && Msg(r) == "Refused: 'action' is required.", "missing refused: " + Msg(r));
-            r = rig.Send("{\"id\":5,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"esc\",\"x\":1}}");
-            True(!Ok(r), "unknown arg refused");
-            Equal("nothing", l.Listener.Action, "action unchanged");
-            True(!l.Listener.Running, "no reader started");
-            Equal(0, l.Source.OpenCalls, "collection never opened");
+            var r = rig.Send(PressLine(1, Pair(LibShortcut, CcCenter), Pair(LibLong, CcLong)));
+            True(Ok(r), "ok: " + Msg(r));
+            var written = (object[])((Dictionary<string, object>)r["data"])["written"];
+            SeqEqual(new[] { "single", "long" }, Array.ConvertAll(written, o => (string)o), "written");
+            WritesAre(rig.Bus, "single then long", SingleBytes, LongBytes);
+            Equal(0, rig.Pad.Calls, "no gamepad check");
+            Equal(0, rig.Sleeps.Count, "no wait");
+            True(Array.IndexOf(TractionCore.ReadCommands, "set_press_bindings") < 0, "not a read command");
+        }
+
+        public static void SetPressBindings_RefusesBeforeWriting()
+        {
+            var rig = new Rig();
+            string good = Pair(LibLong, CcLong);
+            string bad = "05-00-99-00-00-00-00-00-00";
+            var r = rig.Send(PressLine(1, good, Pair(LibLong, bad)));
+            True(!Ok(r), "refused");
+            Equal("Refused: unknown press binding '" + bad + "'.", Msg(r), "message names the slot");
+            foreach (string line in new[] {
+                PressLine(2, Pair(bad, CcCenter), good),
+                PressLine(3, "[\"" + LibLong + "\"]", good),
+                PressLine(4, "[\"" + LibLong + "\",\"" + CcLong + "\",\"" + CcLong + "\"]", good),
+                PressLine(5, "[\"" + LibLong + "\",5]", good),
+                PressLine(6, "\"" + LibLong + "\"", good),
+                PressLine(7, good, "null"),
+                "{\"id\":8,\"cmd\":\"set_press_bindings\",\"args\":{\"single\":" + good + "}}",
+                "{\"id\":9,\"cmd\":\"set_press_bindings\",\"args\":{\"long\":" + good + "}}",
+                "{\"id\":10,\"cmd\":\"set_press_bindings\",\"args\":{\"single\":" + good + ",\"long\":" + good + ",\"x\":1}}" })
+            {
+                r = rig.Send(line);
+                True(!Ok(r) && Msg(r).StartsWith("Refused:"), "refused: " + line + " -> " + Msg(r));
+            }
+            Equal(0, rig.Bus.Lists, "refusals never reached the HID layer");
+            Equal(0, rig.Bus.Writes.Count, "nothing written");
 
             var bare = new Rig();
-            r = bare.Send("{\"id\":6,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"esc\"}}");
-            True(!Ok(r), "no listener refused");
-            Equal(TractionCore.ControllerUnavailable, Msg(r), "no listener message");
+            bare.Core.Hid = null;
+            Equal(TractionCore.ControllerUnavailable, Msg(bare.Send(PressLine(11, good, good))), "no controller");
+
+            var gone = new Rig();
+            gone.Bus.Devices.RemoveAll(c => c.Path == FakeHidBus.MatchPath);
+            Equal("Controller not found", Msg(gone.Send(PressLine(12, good, good))), "not found");
+            Equal(0, gone.Bus.Writes.Count, "nothing written");
+
+            var failing = new Rig();
+            failing.Bus.Fail = true;
+            r = failing.Send(PressLine(13, good, good));
+            True(!Ok(r) && Msg(r).Contains("feature write failed"), "write error passed on: " + Msg(r));
+            Equal(1, failing.Bus.Writes.Count, "stops after the first failure");
+
+            var not = new Rig(false);
+            Equal(TractionCore.NotAllyMessage, Msg(not.Send(PressLine(14, good, good))), "refused off the Ally");
+            Equal(0, not.Bus.Writes.Count, "nothing written");
         }
 
-        public static void SetButtonAction_ReplyHasActionAndRunning()
+        // The first Part B's reader is gone.
+        public static void SetButtonAction_Gone()
         {
             var rig = new Rig();
-            ListenRig l = AttachListener(rig);
-            try
-            {
-                var r = rig.Send("{\"id\":1,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"screenshot\"}}");
-                True(Ok(r), "ok: " + Msg(r));
-                var d = (Dictionary<string, object>)r["data"];
-                Equal("screenshot", d["action"], "action");
-                Equal(true, d["running"], "running");
-                True(WaitUntil(() => l.Source.IsOpen, 2000), "collection opened");
-                r = rig.Send("{\"id\":2,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"screenshot\"}}");
-                d = (Dictionary<string, object>)r["data"];
-                True(Ok(r) && (bool)d["running"], "the same action again still running");
-                Equal(1, l.Listener.Opens, "the same action again is a no-op");
-                r = rig.Send("{\"id\":3,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"alt_tab\"}}");
-                d = (Dictionary<string, object>)r["data"];
-                True(Ok(r) && (string)d["action"] == "alt_tab" && (bool)d["running"], "another action");
-                l.Now = l.Now.AddSeconds(1);
-                True(l.Listener.Handle(Ec), "fires");
-                Equal("down 0x12, down 0x09, up 0x09, up 0x12", l.Sender.Sends[0], "the new action runs");
-                r = rig.Send("{\"id\":4,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"nothing\"}}");
-                d = (Dictionary<string, object>)r["data"];
-                True(Ok(r), "nothing ok");
-                Equal("nothing", d["action"], "action nothing");
-                Equal(false, d["running"], "not running");
-                Equal(0, rig.Bus.Writes.Count, "nothing written to the controller");
-            }
-            finally { l.Listener.SetAction("nothing"); }
-        }
-
-        public static void SetButtonAction_ReplyHasOpenAndLastError()
-        {
-            var rig = new Rig();
-            ListenRig l = AttachListener(rig);
-            try
-            {
-                var r = rig.Send("{\"id\":1,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"nothing\"}}");
-                var d = (Dictionary<string, object>)r["data"];
-                Equal(false, d["open"], "not open with nothing");
-                Equal("", d["last_error"], "no error yet");
-                l.Source.OpenResults.Enqueue(false);
-                rig.Send("{\"id\":2,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"esc\"}}");
-                True(WaitUntil(() => l.Listener.IsOpen, 3000), "opened after the retry");
-                r = rig.Send("{\"id\":3,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"esc\"}}");
-                d = (Dictionary<string, object>)r["data"];
-                Equal(true, d["open"], "open");
-                True(((string)d["last_error"]).Contains("open"), "last error: " + d["last_error"]);
-            }
-            finally { l.Listener.SetAction("nothing"); }
-        }
-
-        public static void SetButtonAction_NotAllyRefused()
-        {
-            var rig = new Rig(false);
-            ListenRig l = AttachListener(rig);
             var r = rig.Send("{\"id\":1,\"cmd\":\"set_button_action\",\"args\":{\"action\":\"esc\"}}");
-            True(!Ok(r), "refused off the Ally");
-            Equal(TractionCore.NotAllyMessage, Msg(r), "message");
-            True(Array.IndexOf(TractionCore.ReadCommands, "set_button_action") < 0, "not a read command");
-            Equal("nothing", l.Listener.Action, "action unchanged");
-            True(!l.Listener.Running, "no reader");
+            True(!Ok(r) && Msg(r).Contains("unknown command"), "unknown command: " + Msg(r));
+            True(!new List<string>(TractionCore.CommandNames).Contains("set_button_action"), "not in the command table");
+            Equal(0, rig.Bus.Writes.Count, "no hardware call");
         }
 
         // ---------- Armoury Crate ----------
