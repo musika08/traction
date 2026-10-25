@@ -41,3 +41,18 @@ Findings:
 - While another window is in front, Steam's desktop layout turns the controller into keyboard keys (A = Enter) and XInput shows no buttons, so on-device tests must run with Steam Big Picture in front.
 
 Owner decision: each back button can be either the Shift (layer-2) key for combos, or a normal button; and Traction lets the owner set what the combos (layer-2 bindings of other buttons) do.
+
+## Part B probe: Command Center and Armoury Crate buttons (2026-10-25)
+
+Read-only listener on every ASUS 0x0B05 HID collection of PID 0x1B4C (the keyboard and mouse collections can't be
+opened: access denied, Windows owns them) plus a low-level keyboard hook. Armoury Crate SE and all ASUS services were
+running; nothing opened on any press.
+
+- **Command Center** (left side, above View): before the InitInput hello, input report `5A A6` (166, G-Helper's "cc")
+  then `5A 00` 1 ms later. After one InitInput (`5A` + "ASUS Tech.Inc."), the same press came as the key **F21**
+  (vk 0x84, scan 0x6C) down and up 4 ms apart, and no `5A A6`.
+- **Armoury Crate** (right side, below Menu): `5A EC` (236) only, no release report; the same before and after
+  InitInput. G-Helper ignores 236 (it expects 56 or 147 on the older Ally).
+- **Holds**: a 3 s and a 5 s hold each gave exactly one event at the press, the same as a quick tap. The firmware
+  sends no release timing, so a long press can't be told apart from a single press.
+- Back button + Command Center: not tested (the press only showed the plain code earlier).
