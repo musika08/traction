@@ -1002,6 +1002,25 @@ namespace Traction.Helper.Tests
             }
         }
 
+        // Armoury Crate's saved shortcut ids 0x21-0x2A (the ones whose keys are not in Bindings are 0x23, 0x26-0x2A).
+        public static void PressBindings_AllowsArmouryShortcuts()
+        {
+            foreach (byte m in new byte[] { 0x82, 0x88, 0x8A, 0x8C })
+                True(Array.IndexOf(PressBindings.KeyCodes, m) >= 0, "modifier " + m.ToString("X2") + " derived from Bindings");
+            foreach (string slot in new[] {
+                "04-00-00-03-8C-88-76-00-00",   // 0x21
+                "04-00-00-02-82-0D-00-00-00",   // 0x22
+                "04-00-00-02-82-1C-00-00-00",   // 0x23
+                "04-00-00-02-8A-0C-00-00-00",   // 0x24
+                "04-00-00-02-82-1B-00-00-00",   // 0x25
+                "04-00-00-02-82-55-00-00-00",   // 0x26
+                "04-00-00-03-8C-8A-C0-00-00",   // 0x27
+                "04-00-00-02-82-78-00-00-00",   // 0x28
+                "04-00-00-02-82-33-00-00-00",   // 0x29
+                "04-00-00-03-82-88-57-00-00" }) // 0x2A
+                True(PressBindings.IsAllowedSlot(slot), "Armoury Crate shortcut " + slot);
+        }
+
         public static void PressBindings_RefusesBad()
         {
             foreach (string slot in new[] {

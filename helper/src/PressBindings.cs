@@ -27,6 +27,10 @@ namespace Traction.Helper
         // shortcut codes, so the two lists cannot drift.
         public static readonly byte[] KeyCodes = KeysFromBindings();
 
+        // Keys used by Armoury Crate's saved shortcut ids 0x23 and 0x26-0x2A (GamepadCustomizePlugin combo table); their
+        // modifiers 0x82, 0x88, 0x8A and 0x8C are already in KeyCodes.
+        public static readonly byte[] ArmouryShortcutKeys = { 0x1C, 0x33, 0x55, 0x57, 0x78, 0xC0 };
+
         private static byte[] KeysFromBindings()
         {
             var keys = new List<byte>();
@@ -58,7 +62,8 @@ namespace Traction.Helper
                 int n = b[3];
                 if (b[1] != 0 || b[2] != 0 || n < 1 || n > 3) return false;
                 for (int i = 4; i < 4 + n; i++)
-                    if (b[i] == 0 || Array.IndexOf(KeyCodes, b[i]) < 0) return false;
+                    if (b[i] == 0 || (Array.IndexOf(KeyCodes, b[i]) < 0 && Array.IndexOf(ArmouryShortcutKeys, b[i]) < 0))
+                        return false;
                 return ZeroFrom(b, 4 + n);
             }
             return false;
